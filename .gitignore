@@ -1,0 +1,61 @@
+# Файлы базы данных
+*.db
+*.sqlite
+*.sqlite3
+
+# Файлы Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+ENV/
+env.bak/
+venv.bak/
+
+# Файлы конфигурации с чувствительной информацией
+config_local.py
+.env
+.env.local
+.env.*.local
+
+# Логи
+*.log
+logs/
+
+# Временные файлы
+*.tmp
+*.temp
+.tmp/
+temp/
+
+# Файлы ОС
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# CSV файлы с данными пользователей (если не нужны в репозитории)
+chat_*.csv
+
+# Документация сборки
+build/
+dist/
+*.egg-info/
+
+# Токены и ключи API (если случайно попадут)
+*token*
+*api_key*
+*secret*
