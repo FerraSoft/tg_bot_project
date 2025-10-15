@@ -1277,7 +1277,7 @@ ID: {user_info['ID']}
         ]
         reply_markup = InlineKeyboardMarkup(keyboard)
 
-        await query.edit_message_text(messages.HELP_TEXT, parse_mode='HTML', reply_markup=reply_markup)
+        await query.edit_message_text(HELP_TEXT, parse_mode='HTML', reply_markup=reply_markup)
 
     async def show_games_menu(self, query):
         """Показать меню выбора игр"""
