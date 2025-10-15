@@ -304,6 +304,14 @@ ID: {user_info['ID']}
             await self.handle_tic_tac_toe_move(query, context)
         elif query.data.startswith('quiz_'):
             await self.handle_quiz_answer(query, context)
+        elif query.data.startswith('confirm_schedule_'):
+            await self.confirm_schedule_post(query, context)
+        elif query.data == 'edit_text':
+            await self.edit_schedule_text(query, context)
+        elif query.data == 'add_image':
+            await self.add_schedule_image(query, context)
+        elif query.data == 'cancel_schedule':
+            await self.cancel_schedule_post(query, context)
 
 
     async def start_rps_game(self, query, context):
@@ -972,24 +980,36 @@ ID: {user_info['ID']}
             await update.message.reply_text(SCHEDULER_MESSAGES['time_in_past'])
             return
 
-        # Добавление поста в базу данных
-        post_id = db.add_scheduled_post(
-            chat_id=update.effective_chat.id,
-            text=text,
-            schedule_time=schedule_time.strftime('%Y-%m-%d %H:%M:%S'),
-            created_by=user.id
-        )
+        # Показываем предварительный просмотр поста
+        preview_text = f"""
+📝 <b>Предварительный просмотр поста:</b>
 
-        if post_id:
-            await update.message.reply_text(
-                SCHEDULER_MESSAGES['post_scheduled'].format(
-                    time=schedule_time.strftime('%Y-%m-%d %H:%M:%S'),
-                    text=text[:50] + ('...' if len(text) > 50 else ''),
-                    post_id=post_id
-                )
-            )
-        else:
-            await update.message.reply_text(SCHEDULER_MESSAGES['save_error'])
+📅 <b>Время публикации:</b> {schedule_time.strftime('%Y-%m-%d %H:%M:%S')}
+
+📋 <b>Текст поста:</b>
+{text}
+
+❓ Что вы хотите сделать?
+        """
+
+        keyboard = [
+            [InlineKeyboardButton("✅ Опубликовать сейчас", callback_data=f'confirm_schedule_{schedule_time.strftime("%Y%m%d_%H%M%S")}_{len(text)}')],
+            [InlineKeyboardButton("📝 Изменить текст", callback_data='edit_text')],
+            [InlineKeyboardButton("🖼 Добавить картинку", callback_data='add_image')],
+            [InlineKeyboardButton("❌ Отменить", callback_data='cancel_schedule')]
+        ]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+
+        # Сохраняем данные для подтверждения в user_data
+        context.user_data['schedule_draft'] = {
+            'time_str': time_str,
+            'text': text,
+            'schedule_time': schedule_time,
+            'chat_id': update.effective_chat.id,
+            'created_by': user.id
+        }
+
+        await update.message.reply_text(preview_text, parse_mode='HTML', reply_markup=reply_markup)
 
     async def list_posts(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Показать список запланированных постов"""
@@ -1149,6 +1169,12 @@ ID: {user_info['ID']}
     async def handle_message(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Обработка текстовых сообщений"""
         user = update.effective_user
+
+        # Проверяем, ждет ли пользователь редактирования текста поста
+        if context.user_data.get('waiting_for_text_edit'):
+            await self.handle_text_edit(update, context)
+            return
+
         message_text = update.message.text.lower()
 
         # Добавление пользователя в базу данных
@@ -1200,6 +1226,39 @@ ID: {user_info['ID']}
             bonus_points = random.randint(SCORE_VALUES['bonus_min'], SCORE_VALUES['bonus_max'])
             db.update_score(user.id, bonus_points)
             await update.message.reply_text(USER_MESSAGES['bonus_points'].format(points=bonus_points))
+
+    async def handle_text_edit(self, update, context):
+        """Обработка редактирования текста поста"""
+        new_text = update.message.text
+
+        draft = context.user_data.get('schedule_draft')
+        if draft:
+            draft['text'] = new_text
+            context.user_data['schedule_draft'] = draft
+
+            # Показываем обновленный предварительный просмотр
+            preview_text = f"""
+📝 <b>Текст обновлен! Предварительный просмотр:</b>
+
+📅 <b>Время публикации:</b> {draft['schedule_time'].strftime('%Y-%m-%d %H:%M:%S')}
+
+📋 <b>Новый текст поста:</b>
+{new_text}
+
+❓ Что вы хотите сделать?
+            """
+
+            keyboard = [
+                [InlineKeyboardButton("✅ Опубликовать сейчас", callback_data=f'confirm_schedule_{draft["schedule_time"].strftime("%Y%m%d_%H%M%S")}_{len(new_text)}')],
+                [InlineKeyboardButton("📝 Изменить текст еще раз", callback_data='edit_text')],
+                [InlineKeyboardButton("🖼 Добавить картинку", callback_data='add_image')],
+                [InlineKeyboardButton("❌ Отменить", callback_data='cancel_schedule')]
+            ]
+            reply_markup = InlineKeyboardMarkup(keyboard)
+
+            await update.message.reply_text(preview_text, parse_mode='HTML', reply_markup=reply_markup)
+
+        context.user_data.pop('waiting_for_text_edit', None)
 
     async def handle_new_chat_members(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Обработка новых участников чата"""
@@ -1302,6 +1361,73 @@ ID: {user_info['ID']}
         reply_markup = InlineKeyboardMarkup(keyboard)
 
         await query.edit_message_text(GAME_MESSAGES['select_game'], reply_markup=reply_markup)
+
+    async def confirm_schedule_post(self, query, context):
+        """Подтверждение и добавление поста в расписание"""
+        try:
+            draft = context.user_data.get('schedule_draft')
+            if not draft:
+                await query.edit_message_text("❌ Данные поста не найдены. Попробуйте создать пост заново.")
+                return
+
+            # Добавление поста в базу данных
+            post_id = db.add_scheduled_post(
+                chat_id=draft['chat_id'],
+                text=draft['text'],
+                schedule_time=draft['schedule_time'].strftime('%Y-%m-%d %H:%M:%S'),
+                created_by=draft['created_by']
+            )
+
+            if post_id:
+                await query.edit_message_text(
+                    f"✅ Пост успешно запланирован!\n\n📅 Время публикации: {draft['schedule_time'].strftime('%Y-%m-%d %H:%M:%S')}\n📝 Текст: {draft['text'][:50]}{'...' if len(draft['text']) > 50 else ''}\n🆔 ID поста: {post_id}"
+                )
+            else:
+                await query.edit_message_text("❌ Ошибка при сохранении поста в базу данных.")
+
+            # Очищаем черновик
+            context.user_data.pop('schedule_draft', None)
+
+        except Exception as e:
+            await query.edit_message_text(f"❌ Ошибка при планировании поста: {str(e)}")
+
+    async def edit_schedule_text(self, query, context):
+        """Редактирование текста поста"""
+        draft = context.user_data.get('schedule_draft')
+        if not draft:
+            await query.edit_message_text("❌ Данные поста не найдены.")
+            return
+
+        await query.edit_message_text(
+            "📝 Отправьте новый текст для поста в ответ на это сообщение.\n\nТекущий текст:\n" + draft['text'],
+            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("❌ Отменить", callback_data='cancel_schedule')]])
+        )
+
+        # Устанавливаем флаг ожидания нового текста
+        context.user_data['waiting_for_text_edit'] = True
+
+    async def add_schedule_image(self, query, context):
+        """Добавление картинки к посту"""
+        draft = context.user_data.get('schedule_draft')
+        if not draft:
+            await query.edit_message_text("❌ Данные поста не найдены.")
+            return
+
+        await query.edit_message_text(
+            "🖼 Отправьте картинку для поста в ответ на это сообщение.\n\nТекущий текст:\n" + draft['text'],
+            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("❌ Отменить", callback_data='cancel_schedule')]])
+        )
+
+        # Устанавливаем флаг ожидания картинки
+        context.user_data['waiting_for_image'] = True
+
+    async def cancel_schedule_post(self, query, context):
+        """Отмена планирования поста"""
+        context.user_data.pop('schedule_draft', None)
+        context.user_data.pop('waiting_for_text_edit', None)
+        context.user_data.pop('waiting_for_image', None)
+
+        await query.edit_message_text("❌ Планирование поста отменено.")
 
     def run(self):
         """Запуск бота"""
