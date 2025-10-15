@@ -5,7 +5,7 @@ import os
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, InlineQueryResultArticle, InputTextMessageContent
 from telegram.ext import ApplicationBuilder, ContextTypes, CommandHandler, MessageHandler, filters, InlineQueryHandler, ChatMemberHandler
 from database_sqlite import Database
-from config import BOT_TOKEN, OPENWEATHER_API_KEY, NEWS_API_KEY
+from config_local import BOT_TOKEN, OPENWEATHER_API_KEY, NEWS_API_KEY
 from messages import *
 
 # Настройка логирования
@@ -68,7 +68,10 @@ class TelegramBot:
         user = update.effective_user
         db.add_user(user.id, user.username, user.first_name, user.last_name)
 
-        keyboard = GAME_KEYBOARDS['main_menu']
+        keyboard = [
+            [InlineKeyboardButton("📋 Помощь", callback_data='cmd_help')],
+            [InlineKeyboardButton("🎮 Мини игры", callback_data='cmd_play_game')]
+        ]
         reply_markup = InlineKeyboardMarkup(keyboard)
 
         welcome_text = USER_MESSAGES['welcome'].format(name=user.first_name)
@@ -77,10 +80,13 @@ class TelegramBot:
 
     async def help(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Обработчик команды /help"""
-        keyboard = GAME_KEYBOARDS['help_menu']
+        keyboard = [
+            [InlineKeyboardButton("🚀 Старт", callback_data='cmd_start')],
+            [InlineKeyboardButton("🔄 Начать заново", callback_data='cmd_restart')]
+        ]
         reply_markup = InlineKeyboardMarkup(keyboard)
 
-        await update.message.reply_text(messages.HELP_TEXT, parse_mode='HTML', reply_markup=reply_markup)
+        await update.message.reply_text(HELP_TEXT, parse_mode='HTML', reply_markup=reply_markup)
 
     async def rank(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Показать рейтинг пользователя"""
@@ -540,7 +546,10 @@ ID: {user_info['ID']}
         question = context.user_data.get('quiz_question', {})
 
         if answer_index == correct_index:
-            keyboard = GAME_KEYBOARDS['help_menu']
+            keyboard = [
+                [InlineKeyboardButton("🚀 Старт", callback_data='cmd_start')],
+                [InlineKeyboardButton("🔄 Начать заново", callback_data='cmd_restart')]
+            ]
             reply_markup = InlineKeyboardMarkup(keyboard)
             await query.edit_message_text(GAME_MESSAGES['quiz_correct'].format(
                 question=question.get('question', ''),
@@ -548,7 +557,10 @@ ID: {user_info['ID']}
             ), reply_markup=reply_markup)
             db.update_score(query.from_user.id, SCORE_VALUES['game_win'])
         else:
-            keyboard = GAME_KEYBOARDS['help_menu']
+            keyboard = [
+                [InlineKeyboardButton("🚀 Старт", callback_data='cmd_start')],
+                [InlineKeyboardButton("🔄 Начать заново", callback_data='cmd_restart')]
+            ]
             reply_markup = InlineKeyboardMarkup(keyboard)
             correct_answer = question.get('answers', [])[correct_index] if correct_index < len(question.get('answers', [])) else "неизвестен"
             await query.edit_message_text(GAME_MESSAGES['quiz_wrong'].format(
@@ -1147,12 +1159,12 @@ ID: {user_info['ID']}
 
         # Проверка на слова "реквизиты"
         if "реквизиты" in message_text or "реквизит" in message_text:
-            await update.message.reply_text(messages.BANK_DETAILS_TEXT, reply_to_message_id=update.message.message_id)
+            await update.message.reply_text(BANK_DETAILS_TEXT, reply_to_message_id=update.message.message_id)
             return
 
         # Предопределенные ответы
         response_found = False
-        for key, response in messages.PREDEFINED_RESPONSES.items():
+        for key, response in PREDEFINED_RESPONSES.items():
             if key in message_text:
                 await update.message.reply_text(response)
                 response_found = True
@@ -1160,7 +1172,10 @@ ID: {user_info['ID']}
 
         if not response_found:
             # Если нет предопределенного ответа, показываем сообщение и help
-            keyboard = GAME_KEYBOARDS['main_menu']
+            keyboard = [
+                [InlineKeyboardButton("📋 Помощь", callback_data='cmd_help')],
+                [InlineKeyboardButton("🎮 Мини игры", callback_data='cmd_play_game')]
+            ]
             reply_markup = InlineKeyboardMarkup(keyboard)
 
             await update.message.reply_text(
@@ -1233,7 +1248,10 @@ ID: {user_info['ID']}
 
     async def show_start_menu(self, query):
         """Показать стартовое меню"""
-        keyboard = GAME_KEYBOARDS['main_menu']
+        keyboard = [
+            [InlineKeyboardButton("📋 Помощь", callback_data='cmd_help')],
+            [InlineKeyboardButton("🎮 Мини игры", callback_data='cmd_play_game')]
+        ]
         reply_markup = InlineKeyboardMarkup(keyboard)
 
         welcome_text = f"""
@@ -1253,7 +1271,10 @@ ID: {user_info['ID']}
 
     async def show_help_menu(self, query):
         """Показать меню помощи"""
-        keyboard = GAME_KEYBOARDS['help_menu']
+        keyboard = [
+            [InlineKeyboardButton("🚀 Старт", callback_data='cmd_start')],
+            [InlineKeyboardButton("🔄 Начать заново", callback_data='cmd_restart')]
+        ]
         reply_markup = InlineKeyboardMarkup(keyboard)
 
         await query.edit_message_text(messages.HELP_TEXT, parse_mode='HTML', reply_markup=reply_markup)
