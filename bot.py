@@ -5,7 +5,7 @@ import os
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, InlineQueryResultArticle, InputTextMessageContent
 from telegram.ext import ApplicationBuilder, ContextTypes, CommandHandler, MessageHandler, filters, InlineQueryHandler, ChatMemberHandler
 from database_sqlite import Database
-from config_local import BOT_TOKEN, OPENWEATHER_API_KEY, NEWS_API_KEY
+from config_local import BOT_TOKEN, OPENWEATHER_API_KEY, NEWS_API_KEY, ADMIN_IDS
 from messages import *
 
 # Настройка логирования
@@ -1129,6 +1129,11 @@ ID: {user_info['ID']}
 
     async def is_admin(self, chat, user_id):
         """Проверка, является ли пользователь администратором"""
+        # Сначала проверяем по списку ADMIN_IDS
+        if user_id in ADMIN_IDS:
+            return True
+
+        # Затем проверяем статус в чате
         try:
             member = await chat.get_member(user_id)
             return member.status in ['administrator', 'creator']
