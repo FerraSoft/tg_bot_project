@@ -2,6 +2,7 @@ import sqlite3
 import os
 from datetime import datetime
 import csv
+from messages import TECH_MESSAGES
 
 class Database:
     def __init__(self, db_file='telegram_bot.db'):
@@ -14,9 +15,9 @@ class Database:
         """Установка соединения с SQLite базой данных"""
         try:
             self.connection = sqlite3.connect(self.db_file)
-            print("Успешное подключение к SQLite базе данных")
+            print(TECH_MESSAGES['db_connected'])
         except sqlite3.Error as error:
-            print(f"Ошибка при подключении к SQLite: {error}")
+            print(TECH_MESSAGES['db_connection_error'].format(error=error))
             self.connection = None
 
     def create_tables(self):
@@ -87,9 +88,9 @@ class Database:
             """)
 
             self.connection.commit()
-            print("Таблицы созданы успешно")
+            print(TECH_MESSAGES['db_tables_created'])
         except sqlite3.Error as error:
-            print(f"Ошибка при создании таблиц: {error}")
+            print(TECH_MESSAGES['db_tables_error'].format(error=error))
 
     def add_user(self, user_id, username, first_name, last_name):
         """Добавление нового пользователя"""
@@ -101,7 +102,7 @@ class Database:
             """, (user_id, username, first_name, last_name))
             self.connection.commit()
         except sqlite3.Error as error:
-            print(f"Ошибка при добавлении пользователя: {error}")
+            print(TECH_MESSAGES['user_added_error'].format(error=error))
 
     def update_score(self, user_id, points=1):
         """Обновление очков пользователя"""
@@ -112,7 +113,7 @@ class Database:
             """, (points, user_id))
             self.connection.commit()
         except sqlite3.Error as error:
-            print(f"Ошибка при обновлении очков: {error}")
+            print(TECH_MESSAGES['score_update_error'].format(error=error))
 
     def update_reputation(self, user_id, rep_points=1):
         """Обновление репутации пользователя"""
@@ -125,7 +126,7 @@ class Database:
             # Обновление ранга на основе репутации
             self.update_rank(user_id)
         except sqlite3.Error as error:
-            print(f"Ошибка при обновлении репутации: {error}")
+            print(TECH_MESSAGES['reputation_update_error'].format(error=error))
 
     def update_rank(self, user_id, chat_id=None, first_name=None):
         """Обновление ранга пользователя на основе репутации"""
@@ -150,35 +151,15 @@ class Database:
                 else:
                     self.connection.commit()
         except sqlite3.Error as error:
-            print(f"Ошибка при обновлении ранга: {error}")
+            print(TECH_MESSAGES['rank_update_error'].format(error=error))
         return None
 
     def calculate_rank(self, reputation):
         """Расчет ранга на основе репутации"""
-        ranks = [
-            (0, "Рядовой"),
-            (100, "Ефрейтор"),
-            (235, "Младший сержант"),
-            (505, "Сержант"),
-            (810, "Старший сержант"),
-            (1250, "Старшина"),
-            (1725, "Прапорщик"),
-            (2335, "Старший прапорщик"),
-            (2980, "Младший лейтенант"),
-            (3760, "Лейтенант"),
-            (4575, "Старший лейтенант"),
-            (5525, "Капитан"),
-            (6510, "Майор"),
-            (7630, "Подполковник"),
-            (8785, "Полковник"),
-            (16075, "Генерал майор"),
-            (32150, "Генерал лейтенант"),
-            (64300, "Генерал полковник"),
-            (128600, "Генерал армии"),
-            (256000, "Маршал")
-        ]
+        # Используем константы из messages.py
+        from messages import RANK_THRESHOLDS
 
-        for threshold, rank_name in reversed(ranks):
+        for threshold, rank_name in reversed(RANK_THRESHOLDS):
             if reputation >= threshold:
                 return rank_name
 
@@ -196,7 +177,7 @@ class Database:
             """, (limit,))
             return cursor.fetchall()
         except sqlite3.Error as error:
-            print(f"Ошибка при получении топ пользователей: {error}")
+            print(TECH_MESSAGES['top_users_error'].format(error=error))
             return []
 
     def add_warning(self, user_id, reason, issued_by):
@@ -214,7 +195,7 @@ class Database:
 
             self.connection.commit()
         except sqlite3.Error as error:
-            print(f"Ошибка при добавлении предупреждения: {error}")
+            print(TECH_MESSAGES['warning_add_error'].format(error=error))
 
     def get_user_warnings(self, user_id):
         """Получение количества предупреждений пользователя"""
@@ -226,7 +207,7 @@ class Database:
             result = cursor.fetchone()
             return result[0] if result else 0
         except sqlite3.Error as error:
-            print(f"Ошибка при получении предупреждений: {error}")
+            print(TECH_MESSAGES['warnings_get_error'].format(error=error))
             return 0
 
     def get_user_info(self, user_id):
@@ -259,14 +240,14 @@ class Database:
                 }
             return None
         except sqlite3.Error as error:
-            print(f"Ошибка при получении информации о пользователе: {error}")
+            print(TECH_MESSAGES['user_info_error'].format(error=error))
             return None
 
     def import_users_from_csv(self, csv_file_path):
         """Импорт пользователей из CSV файла"""
         try:
             if not os.path.exists(csv_file_path):
-                print(f"Файл {csv_file_path} не найден")
+                print(TECH_MESSAGES['csv_file_not_found'].format(file=csv_file_path))
                 return False
 
             imported_count = 0
@@ -312,14 +293,14 @@ class Database:
                         self.connection.commit()
 
                     except (ValueError, KeyError) as e:
-                        print(f"Ошибка обработки строки: {row}. Ошибка: {e}")
+                        print(TECH_MESSAGES['csv_row_error'].format(row=row, error=e))
                         continue
 
             print(f"Импорт завершен. Добавлено: {imported_count}, Обновлено: {updated_count}")
             return True
 
         except sqlite3.Error as error:
-            print(f"Ошибка при импорте пользователей из CSV: {error}")
+            print(TECH_MESSAGES['csv_import_error'].format(error=error))
             return False
 
     def add_scheduled_post(self, chat_id, text, schedule_time, created_by, image_path=None):
@@ -419,4 +400,4 @@ class Database:
         """Закрытие соединения с базой данных"""
         if self.connection:
             self.connection.close()
-            print("Соединение с SQLite закрыто")
+            print(TECH_MESSAGES['db_closed'])

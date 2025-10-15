@@ -13,6 +13,7 @@ from datetime import datetime
 from telegram import Bot
 from database_sqlite import Database
 from config import BOT_TOKEN
+from messages import TECH_MESSAGES, SCHEDULER_CONFIG
 
 # Настройка логирования
 logging.basicConfig(
@@ -30,20 +31,20 @@ class PostScheduler:
     async def start(self):
         """Запуск планировщика"""
         self.running = True
-        logger.info("Планировщик постов запущен")
+        logger.info(TECH_MESSAGES['scheduler_started'])
 
         while self.running:
             try:
                 await self.check_and_publish_posts()
-                await asyncio.sleep(30)  # Проверка каждые 30 секунд
+                await asyncio.sleep(SCHEDULER_CONFIG['check_interval'])  # Проверка каждые 30 секунд
             except Exception as e:
-                logger.error(f"Ошибка в планировщике: {e}")
+                logger.error(TECH_MESSAGES['scheduler_error'].format(error=e))
                 await asyncio.sleep(60)  # При ошибке ждем минуту
 
     async def stop(self):
         """Остановка планировщика"""
         self.running = False
-        logger.info("Планировщик постов остановлен")
+        logger.info(TECH_MESSAGES['scheduler_stopped'])
 
     async def check_and_publish_posts(self):
         """Проверка и публикация постов по расписанию"""
@@ -65,13 +66,13 @@ class PostScheduler:
                     # Отмечаем пост как опубликованный
                     self.db.mark_post_published(post_id)
 
-                    logger.info(f"Пост {post_id} опубликован в чат {chat_id}")
+                    logger.info(TECH_MESSAGES['post_published'].format(post_id=post_id, chat_id=chat_id))
 
                 except Exception as e:
-                    logger.error(f"Ошибка при публикации поста {post_id}: {e}")
+                    logger.error(TECH_MESSAGES['post_publish_error'].format(post_id=post_id, error=e))
 
         except Exception as e:
-            logger.error(f"Ошибка при проверке постов: {e}")
+            logger.error(TECH_MESSAGES['posts_check_error'].format(error=e))
 
 async def main():
     """Главная функция"""

@@ -6,6 +6,14 @@ from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, InlineQ
 from telegram.ext import ApplicationBuilder, ContextTypes, CommandHandler, MessageHandler, filters, InlineQueryHandler, ChatMemberHandler
 from database_sqlite import Database
 from config import BOT_TOKEN, OPENWEATHER_API_KEY, NEWS_API_KEY
+from messages import (
+    PREDEFINED_RESPONSES, HELP_TEXT, BANK_DETAILS_TEXT,
+    SCHEDULER_MESSAGES, RANK_MESSAGES, MODERATION_MESSAGES,
+    GAME_MESSAGES, WEATHER_MESSAGES, NEWS_MESSAGES, TRANSLATE_MESSAGES,
+    IMPORT_MESSAGES, USER_MESSAGES, INLINE_MESSAGES, TECH_MESSAGES,
+    GAME_CHOICES, GAME_KEYBOARDS, QUIZ_QUESTIONS, RANK_THRESHOLDS,
+    SCORE_VALUES, SCHEDULER_CONFIG, POST_STATUSES, USER_ROLES, TELEGRAM_STATUSES
+)
 
 # Настройка логирования
 logging.basicConfig(
@@ -16,53 +24,7 @@ logging.basicConfig(
 # Инициализация базы данных
 db = Database()
 
-# Предопределенные ответы
-PREDEFINED_RESPONSES = {
-    'привет': 'Привет! Как дела?',
-    'как дела': 'Отлично! А у тебя?',
-    'что делаешь': 'Отвечаю на сообщения в чате 😊',
-    'спасибо': 'Пожалуйста! Рад помочь!',
-    'пока': 'До свидания! Заходи еще!',
-}
-
-# Текст справки
-HELP_TEXT = """
-🤖 <b>Команды бота:</b>
-
-<b>Основные:</b>
-/start - Начать работу с ботом
-/help - Показать это сообщение
-/info - Информация о вас
-
-<b>Рейтинг:</b>
-/rank - Ваш текущий рейтинг
-/ranks_info - Информация о системе рангов
-/leaderboard - Топ-10 участников
-
-<b>Информация:</b>
-/weather [город] - Погода в городе
-/news - Последние новости
-/translate [текст] [язык] - Перевод текста
-
-<b>Прочее:</b>
-Введите "реквизиты" - Получить реквизиты для оплаты
-
-<b>Игры:</b>
-/play_game - Запустить мини-игру
-
-<b>Модерация (только для админов):</b>
-/warn [пользователь] [причина] - Выдать предупреждение
-/mute [пользователь] [время] - Заглушить пользователя
-/unmute [пользователь] - Снять заглушку
-/ban [пользователь] [причина] - Забанить пользователя
-/unban [пользователь] - Разбанить пользователя
-/kick [пользователь] [причина] - Кикнуть пользователя
-/promote [пользователь] - Повысить до модератора
-/demote [пользователь] - Понизить с модератора
-"""
-
-# Текст реквизитов
-BANK_DETAILS_TEXT = "Денежные средства можно перечислить по номерам: \r\n💳 89066935474 Елена, \r\n💳89207144698 Людмила\r\nБольшая просьба не писать сообщения при переводе, карту могут заблокировать!!!"
+# Все текстовые сообщения теперь хранятся в отдельном файле messages.py
 
 class TelegramBot:
     def __init__(self):
@@ -113,84 +75,19 @@ class TelegramBot:
         user = update.effective_user
         db.add_user(user.id, user.username, user.first_name, user.last_name)
 
-        keyboard = [
-            [InlineKeyboardButton("📋 Помощь", callback_data='cmd_help')],
-            [InlineKeyboardButton("🎮 Мини игры", callback_data='cmd_play_game')]
-        ]
+        keyboard = GAME_KEYBOARDS['main_menu']
         reply_markup = InlineKeyboardMarkup(keyboard)
 
-        welcome_text = f"""
-Привет, {user.first_name}! 👋
-
-Я ваш помощник в чате. Вот что я умею:
-• Отвечать на сообщения
-• Вести рейтинг участников
-• Предоставлять погоду и новости
-• Играть в мини-игры
-• Помогать с модерацией
-
-Используйте /help для подробной информации.
-        """
+        welcome_text = USER_MESSAGES['welcome'].format(name=user.first_name)
 
         await update.message.reply_text(welcome_text, reply_markup=reply_markup)
 
     async def help(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Обработчик команды /help"""
-        keyboard = [
-            [InlineKeyboardButton("🚀 Старт", callback_data='cmd_start')],
-            [InlineKeyboardButton("🔄 Начать заново", callback_data='cmd_restart')]
-        ]
+        keyboard = GAME_KEYBOARDS['help_menu']
         reply_markup = InlineKeyboardMarkup(keyboard)
 
-        help_text = """
-🤖 <b>Команды бота:</b>
-
-<b>Основные:</b>
-/start - Начать работу с ботом
-/help - Показать это сообщение
-/info - Информация о вас
-
-<b>Рейтинг:</b>
-/rank - Ваш текущий рейтинг
-/ranks_info - Информация о системе рангов
-/leaderboard - Топ-10 участников
-
-<b>Информация:</b>
-/weather [город] - Погода в городе
-/news - Последние новости
-/translate [текст] [язык] - Перевод текста
-
-<b>Прочее:</b>
-Введите "реквизиты" - Получить реквизиты для оплаты
-
-<b>Игры:</b>
-/play_game - Запустить мини-игру
-
-<b>Посты по расписанию (только для админов):</b>
-/schedule_post [время] [текст] - Запланировать пост
-/list_posts - Показать запланированные посты
-/delete_post [ID] - Удалить пост по расписанию
-/publish_now [ID] - Опубликовать пост немедленно
-
-<b>Посты по расписанию (только для админов):</b>
-/schedule_post [время] [текст] - Запланировать пост
-/list_posts - Показать запланированные посты
-/delete_post [ID] - Удалить пост по расписанию
-/publish_now [ID] - Опубликовать пост немедленно
-
-<b>Модерация (только для админов):</b>
-/warn [пользователь] [причина] - Выдать предупреждение
-/mute [пользователь] [время] - Заглушить пользователя
-/unmute [пользователь] - Снять заглушку
-/ban [пользователь] [причина] - Забанить пользователя
-/unban [пользователь] - Разбанить пользователя
-/kick [пользователь] [причина] - Кикнуть пользователя
-/promote [пользователь] - Повысить до модератора
-/demote [пользователь] - Понизить с модератора
-/import_csv [файл] - Импорт пользователей из CSV файла
-        """
-
-        await update.message.reply_text(help_text, parse_mode='HTML', reply_markup=reply_markup)
+        await update.message.reply_text(messages.HELP_TEXT, parse_mode='HTML', reply_markup=reply_markup)
 
     async def rank(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Показать рейтинг пользователя"""
@@ -199,29 +96,29 @@ class TelegramBot:
         user_info = db.get_user_info(user.id)
 
         if user_info:
-            rank_text = f"""
-🏆 <b>Ваш рейтинг:</b>
-
-Очки: {user_info['Очки']}
-Предупреждений: {user_info['Предупреждений']}
-Роль: {user_info['Роль']}
-            """
+            rank_text = RANK_MESSAGES['rank_title'].format(
+                score=user_info['Очки'],
+                warnings=user_info['Предупреждений'],
+                role=user_info['Роль']
+            )
         else:
-            rank_text = "Информация о вас не найдена."
+            rank_text = RANK_MESSAGES['rank_not_found']
 
         await update.message.reply_text(rank_text, parse_mode='HTML')
 
     async def leaderboard(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Показать топ пользователей"""
-        top_users = db.get_top_users(10)
+        top_users = db.get_top_users(100)
 
         if top_users:
-            leaderboard_text = "🏆 <b>Топ-10 участников:</b>\n\n"
+            leaderboard_text = RANK_MESSAGES['leaderboard_title']
             for i, (user_id, username, first_name, score) in enumerate(top_users, 1):
                 name = username if username else first_name
-                leaderboard_text += f"{i}. {name} - {score} очков\n"
+                leaderboard_text += RANK_MESSAGES['leaderboard_entry'].format(
+                    position=i, name=name, score=score
+                )
         else:
-            leaderboard_text = "Рейтинг пока пуст."
+            leaderboard_text = RANK_MESSAGES['leaderboard_empty']
 
         await update.message.reply_text(leaderboard_text, parse_mode='HTML')
 
@@ -297,7 +194,7 @@ ID: {user_info['ID']}
     async def weather(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Получить погоду"""
         if not OPENWEATHER_API_KEY:
-            await update.message.reply_text("API ключ для погоды не настроен.")
+            await update.message.reply_text(WEATHER_MESSAGES['no_api_key'])
             return
 
         city = ' '.join(context.args) if context.args else 'Moscow'
@@ -308,25 +205,24 @@ ID: {user_info['ID']}
             data = response.json()
 
             if data['cod'] == 200:
-                weather_text = f"""
-🌤️ <b>Погода в {data['name']}:</b>
-
-Температура: {data['main']['temp']}°C
-Ощущается как: {data['main']['feels_like']}°C
-Влажность: {data['main']['humidity']}%
-Описание: {data['weather'][0]['description']}
-                """
+                weather_text = WEATHER_MESSAGES['weather_info'].format(
+                    city=data['name'],
+                    temp=data['main']['temp'],
+                    feels_like=data['main']['feels_like'],
+                    humidity=data['main']['humidity'],
+                    description=data['weather'][0]['description']
+                )
             else:
-                weather_text = "Город не найден."
+                weather_text = WEATHER_MESSAGES['city_not_found']
 
             await update.message.reply_text(weather_text, parse_mode='HTML')
         except Exception as e:
-            await update.message.reply_text(f"Ошибка при получении погоды: {e}")
+            await update.message.reply_text(WEATHER_MESSAGES['weather_error'].format(error=e))
 
     async def news(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Получить новости"""
         if not NEWS_API_KEY:
-            await update.message.reply_text("API ключ для новостей не настроен.")
+            await update.message.reply_text(NEWS_MESSAGES['no_api_key'])
             return
 
         try:
@@ -335,20 +231,20 @@ ID: {user_info['ID']}
             data = response.json()
 
             if data['status'] == 'ok' and data['articles']:
-                news_text = "📰 <b>Последние новости:</b>\n\n"
+                news_text = NEWS_MESSAGES['news_title']
                 for i, article in enumerate(data['articles'][:5], 1):
                     news_text += f"{i}. {article['title']}\n{article['url']}\n\n"
             else:
-                news_text = "Новости не найдены."
+                news_text = NEWS_MESSAGES['news_not_found']
 
             await update.message.reply_text(news_text, parse_mode='HTML')
         except Exception as e:
-            await update.message.reply_text(f"Ошибка при получении новостей: {e}")
+            await update.message.reply_text(NEWS_MESSAGES['news_error'].format(error=e))
 
     async def translate(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Перевод текста"""
         if len(context.args) < 2:
-            await update.message.reply_text("Использование: /translate [текст] [язык] (например: /translate hello en)")
+            await update.message.reply_text(TRANSLATE_MESSAGES['usage'])
             return
 
         text = ' '.join(context.args[:-1])
@@ -357,9 +253,9 @@ ID: {user_info['ID']}
         # Простой перевод с помощью Google Translate API (нужен API ключ)
         try:
             # В реальном проекте используйте Google Translate API или другой сервис
-            await update.message.reply_text(f"Перевод '{text}' на {target_lang}: [здесь будет перевод]")
+            await update.message.reply_text(TRANSLATE_MESSAGES['result'].format(text=text, lang=target_lang))
         except Exception as e:
-            await update.message.reply_text(f"Ошибка при переводе: {e}")
+            await update.message.reply_text(TRANSLATE_MESSAGES['error'].format(error=e))
 
     async def play_game(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Запустить мини-игру"""
@@ -407,7 +303,7 @@ ID: {user_info['ID']}
         ]
         reply_markup = InlineKeyboardMarkup(keyboard)
 
-        await query.edit_message_text("🤖 Камень, ножницы, бумага!\n\nВыберите ваш ход:", reply_markup=reply_markup)
+        await query.edit_message_text(GAME_MESSAGES['rps_game'], reply_markup=reply_markup)
 
     async def start_tic_tac_toe_game(self, query, context):
         """Запуск игры 'Крестики-нолики'"""
@@ -444,13 +340,16 @@ ID: {user_info['ID']}
         board[row][col] = 'X'
 
         if self.check_winner(board, 'X'):
-            await query.edit_message_text("🎉 Вы выиграли! 🏆")
-            db.update_score(query.from_user.id, 15)
-            db.update_reputation(query.from_user.id, 15)
+            await query.edit_message_text(GAME_MESSAGES['tic_tac_toe_win'])
+            db.update_score(query.from_user.id, SCORE_VALUES['tic_tac_toe_win'])
+            db.update_reputation(query.from_user.id, SCORE_VALUES['reputation_per_message'])
             rank_update = db.update_rank(query.from_user.id, query.message.chat.id, query.from_user.first_name)
             if rank_update and rank_update.get("promoted"):
                 await query.message.chat.send_message(
-                    f"🌟 За активное участие в группе {rank_update['name']} получил(-а) новое звание {rank_update['new_rank']}!"
+                    RANK_MESSAGES['promotion_message'].format(
+                        name=rank_update['name'],
+                        new_rank=rank_update['new_rank']
+                    )
                 )
             # Показать финальное поле с кнопками
             keyboard = self.create_tic_tac_toe_keyboard(board, game_over=True)
@@ -473,16 +372,16 @@ ID: {user_info['ID']}
         if self.check_winner(board, 'O'):
             keyboard = self.create_tic_tac_toe_keyboard(board, game_over=True)
             reply_markup = InlineKeyboardMarkup(keyboard)
-            await query.edit_message_text("😞 Вы проиграли. Бот победил!", reply_markup=reply_markup)
+            await query.edit_message_text(GAME_MESSAGES['tic_tac_toe_lose'], reply_markup=reply_markup)
             return
 
         if self.is_board_full(board):
-            await query.edit_message_text("🤝 Ничья!")
+            await query.edit_message_text(GAME_MESSAGES['tic_tac_toe_draw'])
             return
 
         keyboard = self.create_tic_tac_toe_keyboard(board)
         reply_markup = InlineKeyboardMarkup(keyboard)
-        await query.edit_message_text("❌⭕ Крестики-нолики!\n\nВаш ход. Выберите клетку:", reply_markup=reply_markup)
+        await query.edit_message_text(GAME_MESSAGES['tic_tac_toe_game'], reply_markup=reply_markup)
 
     def create_tic_tac_toe_keyboard(self, board, game_over=False):
         """Создание клавиатуры для игры"""
@@ -566,14 +465,22 @@ ID: {user_info['ID']}
         result = self.determine_rps_winner(user_choice, bot_choice)
 
         if result == 'win':
-            message = f"🎉 Вы выиграли!\n\nВаш выбор: {choices[user_choice]}\nМой выбор: {choices[bot_choice]}"
-            db.update_score(query.from_user.id, 5)
-            db.update_reputation(query.from_user.id, 5)
-            db.update_reputation(query.from_user.id, 5)
+            message = GAME_MESSAGES['rps_win'].format(
+                user_choice=choices[user_choice],
+                bot_choice=choices[bot_choice]
+            )
+            db.update_score(query.from_user.id, SCORE_VALUES['game_win'])
+            db.update_reputation(query.from_user.id, SCORE_VALUES['reputation_per_message'])
         elif result == 'lose':
-            message = f"😞 Вы проиграли!\n\nВаш выбор: {choices[user_choice]}\nМой выбор: {choices[bot_choice]}"
+            message = GAME_MESSAGES['rps_lose'].format(
+                user_choice=choices[user_choice],
+                bot_choice=choices[bot_choice]
+            )
         else:
-            message = f"🤝 Ничья!\n\nВаш выбор: {choices[user_choice]}\nМой выбор: {choices[bot_choice]}"
+            message = GAME_MESSAGES['rps_draw'].format(
+                user_choice=choices[user_choice],
+                bot_choice=choices[bot_choice]
+            )
 
         keyboard = [
             [InlineKeyboardButton("🔄 Новая игра", callback_data='game_rps')],
@@ -612,7 +519,7 @@ ID: {user_info['ID']}
             keyboard.append([InlineKeyboardButton(answer, callback_data=f'quiz_{i}')])
 
         reply_markup = InlineKeyboardMarkup(keyboard)
-        await query.edit_message_text(f"🧠 Викторина:\n\n{question['question']}", reply_markup=reply_markup)
+        await query.edit_message_text(GAME_MESSAGES['quiz_game'].format(question=question['question']), reply_markup=reply_markup)
 
     async def handle_quiz_answer(self, query, context):
         """Обработка ответа на вопрос викторины"""
@@ -620,27 +527,27 @@ ID: {user_info['ID']}
         correct_index = context.user_data.get('quiz_correct')
 
         if correct_index is None:
-            await query.edit_message_text("Вопрос викторины не найден.")
+            await query.edit_message_text(GAME_MESSAGES['quiz_not_found'])
             return
 
         question = context.user_data.get('quiz_question', {})
 
         if answer_index == correct_index:
-            keyboard = [
-                [InlineKeyboardButton("🔄 Новая игра", callback_data='game_quiz')],
-                [InlineKeyboardButton("⬅️ Назад к играм", callback_data='cmd_play_game')]
-            ]
+            keyboard = GAME_KEYBOARDS['help_menu']
             reply_markup = InlineKeyboardMarkup(keyboard)
-            await query.edit_message_text(f"🎉 Правильно! Вы заработали 5 очков!\n\nВопрос: {question.get('question', '')}\nОтвет: {question.get('answers', [])[correct_index]}", reply_markup=reply_markup)
-            db.update_score(query.from_user.id, 5)
+            await query.edit_message_text(GAME_MESSAGES['quiz_correct'].format(
+                question=question.get('question', ''),
+                answer=question.get('answers', [])[correct_index]
+            ), reply_markup=reply_markup)
+            db.update_score(query.from_user.id, SCORE_VALUES['game_win'])
         else:
-            keyboard = [
-                [InlineKeyboardButton("🔄 Новая игра", callback_data='game_quiz')],
-                [InlineKeyboardButton("⬅️ Назад к играм", callback_data='cmd_play_game')]
-            ]
+            keyboard = GAME_KEYBOARDS['help_menu']
             reply_markup = InlineKeyboardMarkup(keyboard)
             correct_answer = question.get('answers', [])[correct_index] if correct_index < len(question.get('answers', [])) else "неизвестен"
-            await query.edit_message_text(f"❌ Неправильно!\n\nВопрос: {question.get('question', '')}\nПравильный ответ: {correct_answer}", reply_markup=reply_markup)
+            await query.edit_message_text(GAME_MESSAGES['quiz_wrong'].format(
+                question=question.get('question', ''),
+                correct_answer=correct_answer
+            ), reply_markup=reply_markup)
 
         # Очистка данных викторины
         context.user_data.pop('quiz_correct', None)
@@ -649,11 +556,11 @@ ID: {user_info['ID']}
     async def ban_user(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Забанить пользователя (только админы)"""
         if not await self.is_admin(update.effective_chat, update.effective_user.id):
-            await update.message.reply_text("❌ У вас нет прав для выполнения этой команды.")
+            await update.message.reply_text(MODERATION_MESSAGES['no_permission'])
             return
 
         if len(context.args) < 2:
-            await update.message.reply_text("Использование: /ban [пользователь] [причина]")
+            await update.message.reply_text(MODERATION_MESSAGES['ban_usage'])
             return
 
         user_id = context.args[0]
@@ -661,9 +568,9 @@ ID: {user_info['ID']}
 
         try:
             await update.effective_chat.ban_member(int(user_id))
-            await update.message.reply_text(f"🚫 Пользователь {user_id} забанен.\nПричина: {reason}")
+            await update.message.reply_text(MODERATION_MESSAGES['user_banned'].format(user_id=user_id, reason=reason))
         except Exception as e:
-            await update.message.reply_text(f"❌ Ошибка при бане пользователя: {e}")
+            await update.message.reply_text(MODERATION_MESSAGES['ban_error'].format(error=e))
 
     async def unban_user(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Разбанить пользователя (только админы)"""
@@ -679,9 +586,9 @@ ID: {user_info['ID']}
 
         try:
             await update.effective_chat.unban_member(int(user_id))
-            await update.message.reply_text(f"✅ Пользователь {user_id} разбанен.")
+            await update.message.reply_text(MODERATION_MESSAGES['user_unbanned'].format(user_id=user_id))
         except Exception as e:
-            await update.message.reply_text(f"❌ Ошибка при разбане пользователя: {e}")
+            await update.message.reply_text(MODERATION_MESSAGES['unban_error'].format(error=e))
 
     async def mute_user(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Заглушить пользователя (только админы)"""
@@ -697,7 +604,7 @@ ID: {user_info['ID']}
         try:
             mute_time = int(context.args[1])
         except ValueError:
-            await update.message.reply_text("❌ Время должно быть числом в секундах.")
+            await update.message.reply_text(MODERATION_MESSAGES['mute_invalid_time'])
             return
 
         from datetime import datetime, timedelta
@@ -709,18 +616,18 @@ ID: {user_info['ID']}
                 until_date=until_date,
                 can_send_messages=False
             )
-            await update.message.reply_text(f"🔇 Пользователь {user_id} заглушен на {mute_time} секунд.")
+            await update.message.reply_text(MODERATION_MESSAGES['user_muted'].format(user_id=user_id, time=mute_time))
         except Exception as e:
-            await update.message.reply_text(f"❌ Ошибка при mute пользователя: {e}")
+            await update.message.reply_text(MODERATION_MESSAGES['mute_error'].format(error=e))
 
     async def unmute_user(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Снять заглушку с пользователя (только админы)"""
         if not await self.is_admin(update.effective_chat, update.effective_user.id):
-            await update.message.reply_text("❌ У вас нет прав для выполнения этой команды.")
+            await update.message.reply_text(MODERATION_MESSAGES['no_permission'])
             return
 
         if len(context.args) < 1:
-            await update.message.reply_text("Использование: /unmute [пользователь]")
+            await update.message.reply_text(MODERATION_MESSAGES['unmute_usage'])
             return
 
         user_id = context.args[0]
@@ -733,18 +640,18 @@ ID: {user_info['ID']}
                 can_send_other_messages=True,
                 can_add_web_page_previews=True
             )
-            await update.message.reply_text(f"🔊 Заглушка с пользователя {user_id} снята.")
+            await update.message.reply_text(MODERATION_MESSAGES['user_unmuted'].format(user_id=user_id))
         except Exception as e:
-            await update.message.reply_text(f"❌ Ошибка при unmute пользователя: {e}")
+            await update.message.reply_text(MODERATION_MESSAGES['unmute_error'].format(error=e))
 
     async def kick_user(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Кикнуть пользователя (только админы)"""
         if not await self.is_admin(update.effective_chat, update.effective_user.id):
-            await update.message.reply_text("❌ У вас нет прав для выполнения этой команды.")
+            await update.message.reply_text(MODERATION_MESSAGES['no_permission'])
             return
 
         if len(context.args) < 2:
-            await update.message.reply_text("Использование: /kick [пользователь] [причина]")
+            await update.message.reply_text(MODERATION_MESSAGES['kick_usage'])
             return
 
         user_id = context.args[0]
@@ -753,18 +660,18 @@ ID: {user_info['ID']}
         try:
             await update.effective_chat.ban_member(int(user_id))
             await update.effective_chat.unban_member(int(user_id))  # Разбан сразу после бана = кик
-            await update.message.reply_text(f"👢 Пользователь {user_id} кикнут.\nПричина: {reason}")
+            await update.message.reply_text(MODERATION_MESSAGES['user_kicked'].format(user_id=user_id, reason=reason))
         except Exception as e:
-            await update.message.reply_text(f"❌ Ошибка при кике пользователя: {e}")
+            await update.message.reply_text(MODERATION_MESSAGES['kick_error'].format(error=e))
 
     async def promote_user(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Повысить пользователя до модератора (только админы)"""
         if not await self.is_admin(update.effective_chat, update.effective_user.id):
-            await update.message.reply_text("❌ У вас нет прав для выполнения этой команды.")
-            #return
+            await update.message.reply_text(MODERATION_MESSAGES['no_permission'])
+            return
 
         if len(context.args) < 1:
-            await update.message.reply_text("Использование: /promote [пользователь]")
+            await update.message.reply_text(MODERATION_MESSAGES['promote_usage'])
             return
 
         user_id = context.args[0]
@@ -776,18 +683,18 @@ ID: {user_info['ID']}
                 can_restrict_members=True,
                 can_invite_users=True
             )
-            await update.message.reply_text(f"⬆️ Пользователь {user_id} повышен до модератора.")
+            await update.message.reply_text(MODERATION_MESSAGES['user_promoted'].format(user_id=user_id))
         except Exception as e:
-            await update.message.reply_text(f"❌ Ошибка при повышении пользователя: {e}")
+            await update.message.reply_text(MODERATION_MESSAGES['promote_error'].format(error=e))
 
     async def demote_user(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Понизить пользователя с модератора (только админы)"""
         if not await self.is_admin(update.effective_chat, update.effective_user.id):
-            await update.message.reply_text("❌ У вас нет прав для выполнения этой команды.")
+            await update.message.reply_text(MODERATION_MESSAGES['no_permission'])
             return
 
         if len(context.args) < 1:
-            await update.message.reply_text("Использование: /demote [пользователь]")
+            await update.message.reply_text(MODERATION_MESSAGES['demote_usage'])
             return
 
         user_id = context.args[0]
@@ -800,82 +707,38 @@ ID: {user_info['ID']}
                 can_invite_users=False,
                 can_pin_messages=False
             )
-            await update.message.reply_text(f"⬇️ Пользователь {user_id} понижен с модератора.")
+            await update.message.reply_text(MODERATION_MESSAGES['user_demoted'].format(user_id=user_id))
         except Exception as e:
-            await update.message.reply_text(f"❌ Ошибка при понижении пользователя: {e}")
+            await update.message.reply_text(MODERATION_MESSAGES['demote_error'].format(error=e))
 
     async def warn_user(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Выдать предупреждение пользователю (только админы)"""
         if not await self.is_admin(update.effective_chat, update.effective_user.id):
-            await update.message.reply_text("❌ У вас нет прав для выполнения этой команды.")
+            await update.message.reply_text(MODERATION_MESSAGES['no_permission'])
             return
 
         if len(context.args) < 2:
-            await update.message.reply_text("Использование: /warn [пользователь] [причина]")
+            await update.message.reply_text(MODERATION_MESSAGES['warn_usage'])
             return
 
         user_id = context.args[0]
         reason = ' '.join(context.args[1:])
 
         db.add_warning(user_id, reason, update.effective_user.id)
-        await update.message.reply_text(f"⚠️ Предупреждение выдано пользователю {user_id} по причине: {reason}")
+        await update.message.reply_text(MODERATION_MESSAGES['warning_issued'].format(user_id=user_id, reason=reason))
 
     async def ranks_info(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Показать информацию о системе рангов"""
-        ranks_text = """
-        🏆 <b>Военная система рангов</b>
-
-        <b>Как работает система:</b>
-        • Каждый участник начинает с звания "Рядовой"
-        • Звание повышается автоматически при достижении определенного количества очков
-        • Очки начисляются за активность в чате и победы в играх
-
-        <b>Иерархия званий:</b>
-        🪖 Рядовой (0 очков)
-        🪖 Ефрейтор (100 очков)
-        🪖 Младший сержант (235 очков)
-        🪖 Сержант (505 очков)
-        🪖 Старший сержант (810 очков)
-        🪖 Старшина (1,250 очков)
-        🪖 Прапорщик (1,725 очков)
-        🪖 Старший прапорщик (2,335 очков)
-        🪖 Младший лейтенант (2,980 очков)
-        🪖 Лейтенант (3,760 очков)
-        🪖 Старший лейтенант (4,575 очков)
-        🪖 Капитан (5,525 очков)
-        🪖 Майор (6,510 очков)
-        🪖 Подполковник (7,630 очков)
-        🪖 Полковник (8,785 очков)
-        🪖 Генерал майор (16,075 очков)
-        🪖 Генерал лейтенант (32,150 очков)
-        🪖 Генерал полковник (64,300 очков)
-        🪖 Генерал армии (128,600 очков)
-        🪖 Маршал (256,000 очков)
-
-        <b>Как получить очки:</b>
-        • +1 очко за каждое сообщение в чате
-        • +5 очков за победу в мини-игре
-        • +15 очков за победу в крестиках-ноликах
-        • Бонусные очки за активность (случайно 1-5 очков)
-
-        <b>Команды для работы с рангом:</b>
-        /rank - Показать ваш текущий ранг и очки
-        /leaderboard - Топ-10 участников по очкам
-        /info - Детальная информация о вашем профиле
-
-        Служите чату верой и правдой, чтобы достичь высших воинских званий! 🎖️
-        """
-
-        await update.message.reply_text(ranks_text, parse_mode='HTML')
+        await update.message.reply_text(RANK_MESSAGES['rank_info'], parse_mode='HTML')
 
     async def import_csv(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Импорт пользователей из CSV файла (только админы)"""
         if not await self.is_admin(update.effective_chat, update.effective_user.id):
-            await update.message.reply_text("❌ У вас нет прав для выполнения этой команды.")
+            await update.message.reply_text(IMPORT_MESSAGES['no_permission'])
             return
 
         if len(context.args) < 1:
-            await update.message.reply_text("Использование: /import_csv [путь_к_файлу]\n\nПо умолчанию: /import_csv chat_-1001519866478_users_full_20251014.csv")
+            await update.message.reply_text(IMPORT_MESSAGES['usage'])
             return
 
         csv_file = context.args[0] if context.args else 'chat_-1001519866478_users_full_20251014.csv'
@@ -884,18 +747,18 @@ ID: {user_info['ID']}
         if not os.path.isabs(csv_file):
             csv_file = os.path.join('telegram_bot', csv_file)
 
-        await update.message.reply_text(f"🔄 Начинаю импорт пользователей из файла: {csv_file}")
+        await update.message.reply_text(IMPORT_MESSAGES['start_import'].format(file=csv_file))
 
         try:
             success = db.import_users_from_csv(csv_file)
 
             if success:
-                await update.message.reply_text("✅ Импорт пользователей успешно завершен!")
+                await update.message.reply_text(IMPORT_MESSAGES['success'])
             else:
-                await update.message.reply_text("❌ Произошла ошибка при импорте пользователей.")
+                await update.message.reply_text(IMPORT_MESSAGES['error'])
 
         except Exception as e:
-            await update.message.reply_text(f"❌ Ошибка при импорте: {str(e)}")
+            await update.message.reply_text(IMPORT_MESSAGES['file_error'].format(error=str(e)))
 
     async def schedule_post(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Запланировать пост для публикации"""
@@ -903,17 +766,11 @@ ID: {user_info['ID']}
 
         # Проверка прав администратора
         if not await self.is_admin(update.effective_chat, user.id):
-            await update.message.reply_text("❌ У вас нет прав для планирования постов.")
+            await update.message.reply_text(SCHEDULER_MESSAGES['no_permission'])
             return
 
         if len(context.args) < 2:
-            await update.message.reply_text(
-                "Использование: /schedule_post [время] [текст поста]\n\n"
-                "Формат времени:\n"
-                "• Абсолютное: 2024-01-15 14:30:00\n"
-                "• Относительное: +30m (через 30 минут), +2h (через 2 часа), +1d (через день)\n\n"
-                "Пример: /schedule_post +2h Привет всем!"
-            )
+            await update.message.reply_text(SCHEDULER_MESSAGES['usage_schedule'])
             return
 
         # Парсинг времени и текста
@@ -923,11 +780,11 @@ ID: {user_info['ID']}
         try:
             schedule_time = self.parse_schedule_time(time_str)
         except ValueError as e:
-            await update.message.reply_text(f"❌ Ошибка формата времени: {str(e)}")
+            await update.message.reply_text(SCHEDULER_MESSAGES['invalid_format'].format(error=str(e)))
             return
 
         if schedule_time <= datetime.now():
-            await update.message.reply_text("❌ Время публикации должно быть в будущем!")
+            await update.message.reply_text(SCHEDULER_MESSAGES['time_in_past'])
             return
 
         # Добавление поста в базу данных
@@ -940,13 +797,14 @@ ID: {user_info['ID']}
 
         if post_id:
             await update.message.reply_text(
-                f"✅ Пост запланирован!\n\n"
-                f"📅 Время публикации: {schedule_time.strftime('%Y-%m-%d %H:%M:%S')}\n"
-                f"📝 Текст: {text[:50]}{'...' if len(text) > 50 else ''}\n"
-                f"🆔 ID поста: {post_id}"
+                SCHEDULER_MESSAGES['post_scheduled'].format(
+                    time=schedule_time.strftime('%Y-%m-%d %H:%M:%S'),
+                    text=text[:50] + ('...' if len(text) > 50 else ''),
+                    post_id=post_id
+                )
             )
         else:
-            await update.message.reply_text("❌ Ошибка при сохранении поста в базу данных.")
+            await update.message.reply_text(SCHEDULER_MESSAGES['save_error'])
 
     async def list_posts(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Показать список запланированных постов"""
@@ -954,13 +812,13 @@ ID: {user_info['ID']}
 
         # Проверка прав администратора
         if not await self.is_admin(update.effective_chat, user.id):
-            await update.message.reply_text("❌ У вас нет прав для просмотра постов.")
+            await update.message.reply_text(SCHEDULER_MESSAGES['no_permission_view'])
             return
 
         posts = db.get_scheduled_posts(chat_id=update.effective_chat.id)
 
         if not posts:
-            await update.message.reply_text("📭 Нет запланированных постов.")
+            await update.message.reply_text(SCHEDULER_MESSAGES['no_posts'])
             return
 
         response = "📋 <b>Запланированные посты:</b>\n\n"
@@ -983,25 +841,25 @@ ID: {user_info['ID']}
 
         # Проверка прав администратора
         if not await self.is_admin(update.effective_chat, user.id):
-            await update.message.reply_text("❌ У вас нет прав для удаления постов.")
+            await update.message.reply_text(SCHEDULER_MESSAGES['no_permission_delete'])
             return
 
         if len(context.args) < 1:
-            await update.message.reply_text("Использование: /delete_post [ID поста]")
+            await update.message.reply_text(SCHEDULER_MESSAGES['usage_delete'])
             return
 
         try:
             post_id = int(context.args[0])
         except ValueError:
-            await update.message.reply_text("❌ ID поста должен быть числом.")
+            await update.message.reply_text(SCHEDULER_MESSAGES['invalid_id'])
             return
 
         success = db.delete_scheduled_post(post_id, user.id)
 
         if success:
-            await update.message.reply_text(f"✅ Пост {post_id} удален.")
+            await update.message.reply_text(SCHEDULER_MESSAGES['post_deleted'].format(post_id=post_id))
         else:
-            await update.message.reply_text(f"❌ Пост {post_id} не найден или у вас нет прав для его удаления.")
+            await update.message.reply_text(SCHEDULER_MESSAGES['post_not_found'].format(post_id=post_id))
 
     async def publish_now(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Опубликовать пост немедленно"""
@@ -1009,17 +867,17 @@ ID: {user_info['ID']}
 
         # Проверка прав администратора
         if not await self.is_admin(update.effective_chat, user.id):
-            await update.message.reply_text("❌ У вас нет прав для публикации постов.")
+            await update.message.reply_text(SCHEDULER_MESSAGES['no_permission_publish'])
             return
 
         if len(context.args) < 1:
-            await update.message.reply_text("Использование: /publish_now [ID поста]")
+            await update.message.reply_text(SCHEDULER_MESSAGES['usage_publish'])
             return
 
         try:
             post_id = int(context.args[0])
         except ValueError:
-            await update.message.reply_text("❌ ID поста должен быть числом.")
+            await update.message.reply_text(SCHEDULER_MESSAGES['invalid_id'])
             return
 
         # Получаем пост из базы данных
@@ -1031,7 +889,7 @@ ID: {user_info['ID']}
                 break
 
         if not post:
-            await update.message.reply_text(f"❌ Пост {post_id} не найден.")
+            await update.message.reply_text(SCHEDULER_MESSAGES['post_not_found'].format(post_id=post_id))
             return
 
         post_id, chat_id, text, image_path, schedule_time, created_by, status, published_at, created_at, creator_name = post
@@ -1046,10 +904,10 @@ ID: {user_info['ID']}
             # Отмечаем пост как опубликованный
             db.mark_post_published(post_id)
 
-            await update.message.reply_text(f"✅ Пост {post_id} опубликован немедленно!")
+            await update.message.reply_text(SCHEDULER_MESSAGES['post_published'].format(post_id=post_id))
 
         except Exception as e:
-            await update.message.reply_text(f"❌ Ошибка при публикации поста: {str(e)}")
+            await update.message.reply_text(SCHEDULER_MESSAGES['publish_error'].format(error=str(e)))
 
     def parse_schedule_time(self, time_str):
         """Парсинг времени публикации из строки"""
@@ -1113,17 +971,20 @@ ID: {user_info['ID']}
         rank_update = db.update_rank(user.id, update.effective_chat.id, user.first_name)
         if rank_update and rank_update.get("promoted"):
             await update.effective_chat.send_message(
-                f"🌟 За активное участие в группе {rank_update['name']} получил(-а) новое звание {rank_update['new_rank']}!"
+                RANK_MESSAGES['promotion_message'].format(
+                    name=rank_update['name'],
+                    new_rank=rank_update['new_rank']
+                )
             )
 
         # Проверка на слова "реквизиты"
         if "реквизиты" in message_text or "реквизит" in message_text:
-            await update.message.reply_text(BANK_DETAILS_TEXT, reply_to_message_id=update.message.message_id)
+            await update.message.reply_text(messages.BANK_DETAILS_TEXT, reply_to_message_id=update.message.message_id)
             return
 
         # Предопределенные ответы
         response_found = False
-        for key, response in PREDEFINED_RESPONSES.items():
+        for key, response in messages.PREDEFINED_RESPONSES.items():
             if key in message_text:
                 await update.message.reply_text(response)
                 response_found = True
@@ -1131,40 +992,27 @@ ID: {user_info['ID']}
 
         if not response_found:
             # Если нет предопределенного ответа, показываем сообщение и help
-            keyboard = [
-                [InlineKeyboardButton("📋 Помощь", callback_data='cmd_help')],
-                [InlineKeyboardButton("🎮 Мини игры", callback_data='cmd_play_game')]
-            ]
+            keyboard = GAME_KEYBOARDS['main_menu']
             reply_markup = InlineKeyboardMarkup(keyboard)
 
             await update.message.reply_text(
-                "🤖 Извините, я не понял ваше сообщение. Вот что я умею:\n\n"
-                "• Отвечать на простые вопросы\n"
-                "• Вести рейтинг участников\n"
-                "• Предоставлять погоду и новости\n"
-                "• Играть в мини-игры\n"
-                "• Помогать с модерацией\n\n"
-                "Используйте /help для подробной информации.",
+                USER_MESSAGES['unknown_message'],
                 reply_markup=reply_markup
             )
             return
 
         # Случайное начисление очков от 1 до 5 вместо случайных ответов
         if random.random() < 0.1:  # 10% шанс
-            bonus_points = random.randint(1, 5)
+            bonus_points = random.randint(SCORE_VALUES['bonus_min'], SCORE_VALUES['bonus_max'])
             db.update_score(user.id, bonus_points)
-            await update.message.reply_text(f"🎁 Бонус! Вам начислено {bonus_points} очков!")
+            await update.message.reply_text(USER_MESSAGES['bonus_points'].format(points=bonus_points))
 
     async def handle_new_chat_members(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Обработка новых участников чата"""
         for member in update.chat_member.new_chat_members:
             db.add_user(member.id, member.username, member.first_name, member.last_name)
 
-            welcome_text = f"""
-🎉 Добро пожаловать в чат, {member.first_name}! 
-
-Мы рады видеть вас здесь! Используйте /help чтобы узнать о возможностях бота.
-            """
+            welcome_text = USER_MESSAGES['welcome_new_user'].format(name=member.first_name)
 
             await update.effective_chat.send_message(welcome_text)
 
@@ -1217,10 +1065,7 @@ ID: {user_info['ID']}
 
     async def show_start_menu(self, query):
         """Показать стартовое меню"""
-        keyboard = [
-            [InlineKeyboardButton("📋 Помощь", callback_data='cmd_help')],
-            [InlineKeyboardButton("🎮 Мини игры", callback_data='cmd_play_game')]
-        ]
+        keyboard = GAME_KEYBOARDS['main_menu']
         reply_markup = InlineKeyboardMarkup(keyboard)
 
         welcome_text = f"""
@@ -1240,15 +1085,10 @@ ID: {user_info['ID']}
 
     async def show_help_menu(self, query):
         """Показать меню помощи"""
-        keyboard = [
-            [InlineKeyboardButton("🚀 Старт", callback_data='cmd_start')],
-            [InlineKeyboardButton("🔄 Начать заново", callback_data='cmd_restart')]
-        ]
+        keyboard = GAME_KEYBOARDS['help_menu']
         reply_markup = InlineKeyboardMarkup(keyboard)
 
-        help_text = HELP_TEXT
-
-        await query.edit_message_text(help_text, parse_mode='HTML', reply_markup=reply_markup)
+        await query.edit_message_text(messages.HELP_TEXT, parse_mode='HTML', reply_markup=reply_markup)
 
     async def show_games_menu(self, query):
         """Показать меню выбора игр"""
@@ -1260,7 +1100,7 @@ ID: {user_info['ID']}
         ]
         reply_markup = InlineKeyboardMarkup(keyboard)
 
-        await query.edit_message_text("🎮 Выберите игру:", reply_markup=reply_markup)
+        await query.edit_message_text(GAME_MESSAGES['select_game'], reply_markup=reply_markup)
 
     def run(self):
         """Запуск бота"""
