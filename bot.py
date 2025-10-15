@@ -1001,6 +1001,7 @@ ID: {user_info['ID']}
             return
 
         posts = db.get_scheduled_posts(chat_id=update.effective_chat.id)
+        print(f"DEBUG: Found {len(posts)} posts for chat {update.effective_chat.id}")  # Отладочная информация
 
         if not posts:
             await update.message.reply_text(SCHEDULER_MESSAGES['no_posts'])
