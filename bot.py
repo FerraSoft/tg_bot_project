@@ -180,7 +180,7 @@ ID: {user_info['ID']}
 Роль: {user_info['Роль']}
                 """
             else:
-                info_text = "Информация не найдена."
+                info_text = USER_MESSAGES['info_not_found']
 
         await update.message.reply_text(info_text, parse_mode='HTML')
 
