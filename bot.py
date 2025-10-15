@@ -953,9 +953,14 @@ ID: {user_info['ID']}
             await update.message.reply_text(SCHEDULER_MESSAGES['usage_schedule'])
             return
 
-        # Парсинг времени и текста
-        time_str = context.args[0]
-        text = ' '.join(context.args[1:])
+        # Парсинг времени и текста - исправляем обработку аргументов
+        args = context.args if hasattr(context, 'args') else []
+        if not args:
+            await update.message.reply_text(SCHEDULER_MESSAGES['usage_schedule'])
+            return
+
+        time_str = args[0]
+        text = ' '.join(args[1:])
 
         try:
             schedule_time = self.parse_schedule_time(time_str)
