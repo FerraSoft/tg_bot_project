@@ -6,14 +6,7 @@ from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, InlineQ
 from telegram.ext import ApplicationBuilder, ContextTypes, CommandHandler, MessageHandler, filters, InlineQueryHandler, ChatMemberHandler
 from database_sqlite import Database
 from config import BOT_TOKEN, OPENWEATHER_API_KEY, NEWS_API_KEY
-from messages import (
-    PREDEFINED_RESPONSES, HELP_TEXT, BANK_DETAILS_TEXT,
-    SCHEDULER_MESSAGES, RANK_MESSAGES, MODERATION_MESSAGES,
-    GAME_MESSAGES, WEATHER_MESSAGES, NEWS_MESSAGES, TRANSLATE_MESSAGES,
-    IMPORT_MESSAGES, USER_MESSAGES, INLINE_MESSAGES, TECH_MESSAGES,
-    GAME_CHOICES, GAME_KEYBOARDS, QUIZ_QUESTIONS, RANK_THRESHOLDS,
-    SCORE_VALUES, SCHEDULER_CONFIG, POST_STATUSES, USER_ROLES, TELEGRAM_STATUSES
-)
+from messages import *
 
 # Настройка логирования
 logging.basicConfig(
