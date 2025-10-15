@@ -260,7 +260,16 @@ ID: {user_info['ID']}
         ]
         reply_markup = InlineKeyboardMarkup(keyboard)
 
-        await update.message.reply_text("🎮 Выберите игру:", reply_markup=reply_markup)
+        keyboard = [
+            [InlineKeyboardButton("Камень-ножницы-бумага", callback_data='game_rps')],
+            [InlineKeyboardButton("Крестики-нолики", callback_data='game_tic_tac_toe')],
+            [InlineKeyboardButton("Викторина", callback_data='game_quiz')],
+            [InlineKeyboardButton("Морской бой", callback_data='game_battleship')],
+            [InlineKeyboardButton("⬅️ Назад", callback_data='cmd_start')]
+        ]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+
+        await update.message.reply_text(GAME_MESSAGES['select_game'], reply_markup=reply_markup)
 
     async def handle_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Обработка callback запросов от инлайновых кнопок"""
@@ -279,6 +288,10 @@ ID: {user_info['ID']}
             await self.start_tic_tac_toe_game(query, context)
         elif query.data == 'game_quiz':
             await self.start_quiz_game(query, context)
+        elif query.data == 'game_battleship':
+            await self.start_battleship_game(query, context)
+        elif query.data.startswith('bs_'):
+            await self.handle_battleship_shot(query, context)
         elif query.data.startswith('rps_'):
             await self.handle_rps(query, context)
         elif query.data.startswith('tictactoe_'):
@@ -307,7 +320,7 @@ ID: {user_info['ID']}
         keyboard = self.create_tic_tac_toe_keyboard(board)
         reply_markup = InlineKeyboardMarkup(keyboard)
 
-        await query.edit_message_text("❌⭕ Крестики-нолики!\n\nВы ходите первым. Выберите клетку:", reply_markup=reply_markup)
+        await query.edit_message_text(GAME_MESSAGES['tic_tac_toe_game'], reply_markup=reply_markup)
 
     async def handle_tic_tac_toe_move(self, query, context):
         """Обработка ходов в игре Крестики-нолики"""
@@ -317,7 +330,7 @@ ID: {user_info['ID']}
             return
 
         if len(move_data) != 2:
-            await query.answer("Неверный формат хода!")
+            await query.answer(GAME_MESSAGES['invalid_move'])
             return
 
         row, col = map(int, move_data)
@@ -326,7 +339,7 @@ ID: {user_info['ID']}
         turn = context.user_data.get('tictactoe_turn')
 
         if not board or not (0 <= row < 3 and 0 <= col < 3) or board[row][col] != ' ' or turn != 'user':
-            await query.answer("Неверный ход!")
+            await query.answer(GAME_MESSAGES['invalid_move'])
             return
 
         # Ход пользователя
@@ -347,7 +360,7 @@ ID: {user_info['ID']}
             # Показать финальное поле с кнопками
             keyboard = self.create_tic_tac_toe_keyboard(board, game_over=True)
             reply_markup = InlineKeyboardMarkup(keyboard)
-            await query.edit_message_text("🎉 Вы выиграли! 🏆", reply_markup=reply_markup)
+            await query.edit_message_text(GAME_MESSAGES['tic_tac_toe_win'], reply_markup=reply_markup)
             context.user_data.pop('tictactoe_board', None)
             context.user_data.pop('tictactoe_turn', None)
             return
@@ -355,7 +368,7 @@ ID: {user_info['ID']}
         if self.is_board_full(board):
             keyboard = self.create_tic_tac_toe_keyboard(board, game_over=True)
             reply_markup = InlineKeyboardMarkup(keyboard)
-            await query.edit_message_text("🤝 Ничья!", reply_markup=reply_markup)
+            await query.edit_message_text(GAME_MESSAGES['tic_tac_toe_draw'], reply_markup=reply_markup)
             return
 
         # Ход бота
@@ -367,9 +380,10 @@ ID: {user_info['ID']}
             reply_markup = InlineKeyboardMarkup(keyboard)
             await query.edit_message_text(GAME_MESSAGES['tic_tac_toe_lose'], reply_markup=reply_markup)
             return
+            return
 
         if self.is_board_full(board):
-            await query.edit_message_text(GAME_MESSAGES['tic_tac_toe_draw'])
+            await query.edit_message_text(GAME_MESSAGES['tic_tac_toe_draw'], reply_markup=reply_markup)
             return
 
         keyboard = self.create_tic_tac_toe_keyboard(board)
@@ -546,6 +560,167 @@ ID: {user_info['ID']}
         context.user_data.pop('quiz_correct', None)
         context.user_data.pop('quiz_question', None)
 
+    async def start_battleship_game(self, query, context):
+        """Запуск игры 'Морской бой'"""
+        # Создаем поле 5x5 для упрощения (вместо 10x10)
+        board = [['~' for _ in range(5)] for _ in range(5)]
+        bot_ships = self.place_ships()  # Размещаем корабли бота
+
+        # Сохраняем состояние игры
+        context.user_data['battleship_board'] = board
+        context.user_data['battleship_bot_ships'] = bot_ships
+        context.user_data['battleship_shots'] = 0
+        context.user_data['battleship_hits'] = 0
+
+        # Создаем клавиатуру для стрельбы
+        keyboard = self.create_battleship_keyboard(board)
+        reply_markup = InlineKeyboardMarkup(keyboard)
+
+        await query.edit_message_text(GAME_MESSAGES['battleship_start'], reply_markup=reply_markup, parse_mode='HTML')
+
+    def create_battleship_keyboard(self, board):
+        """Создание клавиатуры для Морского боя"""
+        keyboard = []
+
+        # Заголовки столбцов (0-4)
+        header_row = [InlineKeyboardButton(" ", callback_data='bs_header')]
+        for j in range(5):
+            header_row.append(InlineKeyboardButton(str(j), callback_data='bs_header'))
+        keyboard.append(header_row)
+
+        # Строки с буквами и клетками
+        letters = ['A', 'B', 'C', 'D', 'E']
+        for i in range(5):
+            row = [InlineKeyboardButton(letters[i], callback_data='bs_header')]
+            for j in range(5):
+                cell = board[i][j]
+                callback_data = f'bs_{i}{j}'  # Координаты в формате row,col
+                row.append(InlineKeyboardButton(cell, callback_data=callback_data))
+            keyboard.append(row)
+
+        # Кнопка назад
+        keyboard.append([InlineKeyboardButton("⬅️ Назад к играм", callback_data='cmd_play_game')])
+
+        return keyboard
+
+    def place_ships(self):
+        """Размещение кораблей бота (упрощенная версия - 3 корабля)"""
+        ships = []  # Список кораблей как список координат
+        import random
+
+        # Размещаем 3 корабля: 3-клеточный, 2-клеточный, 1-клеточный
+        ship_sizes = [3, 2, 1]
+
+        for size in ship_sizes:
+            placed = False
+            while not placed:
+                # Случайное направление: 0 - горизонтально, 1 - вертикально
+                direction = random.randint(0, 1)
+                if direction == 0:  # Горизонтально
+                    row = random.randint(0, 4)
+                    col = random.randint(0, 4 - size)
+                    ship_coords = [(row, col + i) for i in range(size)]
+                else:  # Вертикально
+                    row = random.randint(0, 4 - size)
+                    col = random.randint(0, 4)
+                    ship_coords = [(row + i, col) for i in range(size)]
+
+                # Проверяем, что корабль не пересекает другие
+                if not any(coord in [c for ship in ships for c in ship] for coord in ship_coords):
+                    ships.append(ship_coords)
+                    placed = True
+
+        return ships
+
+    async def handle_battleship_shot(self, query, context):
+        """Обработка выстрела в Морском бое"""
+        if query.data == 'bs_header':
+            return  # Игнорируем клики по заголовкам
+
+        # Парсим координаты
+        coords = query.data[3:]  # bs_01 -> 01
+        if len(coords) != 2:
+            await query.answer(GAME_MESSAGES['battleship_invalid_coord'])
+            return
+
+        try:
+            row, col = int(coords[0]), int(coords[1])
+        except ValueError:
+            await query.answer(GAME_MESSAGES['battleship_invalid_coord'])
+            return
+
+        board = context.user_data.get('battleship_board')
+        bot_ships = context.user_data.get('battleship_bot_ships')
+
+        if not board or not (0 <= row < 5 and 0 <= col < 5):
+            await query.answer(GAME_MESSAGES['battleship_invalid_coord'])
+            return
+
+        # Проверяем, стреляли ли уже в эту клетку
+        if board[row][col] != '~':
+            await query.answer(GAME_MESSAGES['battleship_already_shot'])
+            return
+
+        # Обновляем счетчик выстрелов
+        context.user_data['battleship_shots'] += 1
+
+        # Проверяем попадание
+        hit = False
+        ship_hit = None
+        for ship in bot_ships:
+            if (row, col) in ship:
+                hit = True
+                ship_hit = ship
+                break
+
+        if hit:
+            board[row][col] = '💥'  # Попадание
+            context.user_data['battleship_hits'] += 1
+
+            # Проверяем, потоплен ли корабль
+            ship_sunk = all(board[r][c] == '💥' for r, c in ship_hit)
+            if ship_sunk:
+                # Помечаем потопленный корабль
+                for r, c in ship_hit:
+                    board[r][c] = '🔥'
+                await query.answer(GAME_MESSAGES['battleship_sunk'])
+            else:
+                await query.answer(GAME_MESSAGES['battleship_hit'])
+        else:
+            board[row][col] = '💧'  # Промах
+            await query.answer(GAME_MESSAGES['battleship_miss'])
+
+        # Проверяем победу (все корабли потоплены)
+        total_ship_cells = sum(len(ship) for ship in bot_ships)
+        if context.user_data['battleship_hits'] >= total_ship_cells:
+            # Победа игрока
+            db.update_score(query.from_user.id, SCORE_VALUES['tic_tac_toe_win'])  # +15 очков
+            db.update_reputation(query.from_user.id, SCORE_VALUES['reputation_per_message'])
+
+            # Проверяем повышение ранга
+            rank_update = db.update_rank(query.from_user.id, query.message.chat.id, query.from_user.first_name)
+            if rank_update and rank_update.get("promoted"):
+                await query.message.chat.send_message(
+                    RANK_MESSAGES['promotion_message'].format(
+                        name=rank_update['name'],
+                        new_rank=rank_update['new_rank']
+                    )
+                )
+
+            keyboard = self.create_battleship_keyboard(board)
+            reply_markup = InlineKeyboardMarkup(keyboard)
+            await query.edit_message_text(GAME_MESSAGES['battleship_win'], reply_markup=reply_markup)
+            # Очистка данных игры
+            context.user_data.pop('battleship_board', None)
+            context.user_data.pop('battleship_bot_ships', None)
+            context.user_data.pop('battleship_shots', None)
+            context.user_data.pop('battleship_hits', None)
+        else:
+            # Продолжаем игру - обновляем клавиатуру
+            keyboard = self.create_battleship_keyboard(board)
+            reply_markup = InlineKeyboardMarkup(keyboard)
+            await query.edit_message_text(GAME_MESSAGES['battleship_start'], reply_markup=reply_markup, parse_mode='HTML')
+
     async def ban_user(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Забанить пользователя (только админы)"""
         if not await self.is_admin(update.effective_chat, update.effective_user.id):
@@ -568,11 +743,11 @@ ID: {user_info['ID']}
     async def unban_user(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Разбанить пользователя (только админы)"""
         if not await self.is_admin(update.effective_chat, update.effective_user.id):
-            await update.message.reply_text("❌ У вас нет прав для выполнения этой команды.")
+            await update.message.reply_text(MODERATION_MESSAGES['no_permission'])
             return
 
         if len(context.args) < 1:
-            await update.message.reply_text("Использование: /unban [пользователь]")
+            await update.message.reply_text(MODERATION_MESSAGES['unban_usage'])
             return
 
         user_id = context.args[0]
@@ -586,11 +761,11 @@ ID: {user_info['ID']}
     async def mute_user(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Заглушить пользователя (только админы)"""
         if not await self.is_admin(update.effective_chat, update.effective_user.id):
-            await update.message.reply_text("❌ У вас нет прав для выполнения этой команды.")
+            await update.message.reply_text(MODERATION_MESSAGES['no_permission'])
             return
 
         if len(context.args) < 2:
-            await update.message.reply_text("Использование: /mute [пользователь] [время_в_секундах]")
+            await update.message.reply_text(MODERATION_MESSAGES['mute_usage'])
             return
 
         user_id = context.args[0]
@@ -1089,6 +1264,7 @@ ID: {user_info['ID']}
             [InlineKeyboardButton("Камень-ножницы-бумага", callback_data='game_rps')],
             [InlineKeyboardButton("Крестики-нолики", callback_data='game_tic_tac_toe')],
             [InlineKeyboardButton("Викторина", callback_data='game_quiz')],
+            [InlineKeyboardButton("Морской бой", callback_data='game_battleship')],
             [InlineKeyboardButton("⬅️ Назад", callback_data='cmd_start')]
         ]
         reply_markup = InlineKeyboardMarkup(keyboard)
