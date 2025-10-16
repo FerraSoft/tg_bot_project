@@ -83,7 +83,7 @@
 
 ## 📞 Контакты команды разработки
 
-- **Tech Lead:** [Имя Фамилия] - email@example.com
+- **Tech Lead:** Александр Костин - alexander.kostin@ferrasoft.ru - @alex_z46
 - **Backend Developer:** [Имя Фамилия] - email@example.com
 - **QA Engineer:** [Имя Фамилия] - email@example.com
 
