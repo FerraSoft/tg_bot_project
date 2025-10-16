@@ -2,12 +2,34 @@ import logging
 import random
 import requests
 import os
-from datetime import datetime
+import asyncio
+import tempfile
+import subprocess
+from datetime import datetime, timedelta
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, InlineQueryResultArticle, InputTextMessageContent
 from telegram.ext import ApplicationBuilder, ContextTypes, CommandHandler, MessageHandler, filters, InlineQueryHandler, ChatMemberHandler
 from database_sqlite import Database
 from config_local import BOT_TOKEN, OPENWEATHER_API_KEY, NEWS_API_KEY, ADMIN_IDS
 from messages import *
+
+try:
+    import speech_recognition as sr
+    SPEECH_RECOGNITION_AVAILABLE = True
+    print("[+] Speech recognition library loaded successfully")
+except ImportError:
+    SPEECH_RECOGNITION_AVAILABLE = False
+    print("[-] Speech recognition library not available")
+    print("  To install: pip install SpeechRecognition")
+    print("  Alternative: pip install speech_recognition")
+
+try:
+    from pydub import AudioSegment
+    PYDUB_AVAILABLE = True
+    print("[+] Pydub library loaded successfully")
+except ImportError:
+    PYDUB_AVAILABLE = False
+    print("[-] Pydub library not available")
+    print("  To install: pip install pydub")
 
 # Настройка логирования
 logging.basicConfig(
@@ -22,6 +44,10 @@ db = Database()
 
 class TelegramBot:
     def __init__(self):
+        # Система отслеживания приветственных сообщений
+        self.welcome_messages = {}  # {chat_id: {'message_id': int, 'timestamp': datetime}}
+        self.cleanup_task = None
+
         self.application = ApplicationBuilder().token(BOT_TOKEN).build()
         self.setup_handlers()
 
@@ -39,6 +65,7 @@ class TelegramBot:
         self.application.add_handler(CommandHandler("news", self.news))
         self.application.add_handler(CommandHandler("translate", self.translate))
         self.application.add_handler(CommandHandler("play_game", self.play_game))
+        self.application.add_handler(CommandHandler("donate", self.donate))
         self.application.add_handler(CommandHandler("ban", self.ban_user))
         self.application.add_handler(CommandHandler("mute", self.mute_user))
         self.application.add_handler(CommandHandler("warn", self.warn_user))
@@ -55,6 +82,7 @@ class TelegramBot:
 
         # Обработчики сообщений
         self.application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, self.handle_message))
+        self.application.add_handler(MessageHandler(filters.VOICE, self.handle_voice_message))
         self.application.add_handler(ChatMemberHandler(self.handle_new_chat_members, ChatMemberHandler.CHAT_MEMBER))
 
         # Инлайновые запросы
@@ -64,8 +92,65 @@ class TelegramBot:
         from telegram.ext import CallbackQueryHandler
         self.application.add_handler(CallbackQueryHandler(self.handle_callback))
 
+    def start_cleanup_task(self):
+        """Запуск задачи очистки приветственных сообщений"""
+        if self.cleanup_task is None or self.cleanup_task.done():
+            self.cleanup_task = asyncio.create_task(self.cleanup_welcome_messages())
+
+    async def cleanup_welcome_messages(self):
+        """Периодическая очистка устаревших приветственных сообщений"""
+        while True:
+            try:
+                await asyncio.sleep(30)  # Проверяем каждые 30 секунд
+                await self.delete_expired_welcome_messages()
+            except asyncio.CancelledError:
+                break
+            except Exception as e:
+                print(f"Ошибка при очистке приветственных сообщений: {e}")
+
+    async def delete_expired_welcome_messages(self):
+        """Удаление просроченных приветственных сообщений"""
+        current_time = datetime.now()
+        expired_chats = []
+
+        for chat_id, message_info in self.welcome_messages.items():
+            message_time = message_info['timestamp']
+            if current_time - message_time > timedelta(minutes=2):
+                try:
+                    await self.application.bot.delete_message(chat_id, message_info['message_id'])
+                    expired_chats.append(chat_id)
+                except Exception as e:
+                    print(f"Не удалось удалить приветственное сообщение в чате {chat_id}: {e}")
+                    expired_chats.append(chat_id)
+
+        # Удаляем записи о просроченных сообщениях
+        for chat_id in expired_chats:
+            self.welcome_messages.pop(chat_id, None)
+
+    async def delete_welcome_message(self, chat_id):
+        """Удаление приветственного сообщения для конкретного чата"""
+        if chat_id in self.welcome_messages:
+            try:
+                message_info = self.welcome_messages[chat_id]
+                await self.application.bot.delete_message(chat_id, message_info['message_id'])
+            except Exception as e:
+                print(f"Не удалось удалить приветственное сообщение в чате {chat_id}: {e}")
+            finally:
+                self.welcome_messages.pop(chat_id, None)
+
+    async def set_welcome_message(self, chat_id, message_id):
+        """Сохранение информации о приветственном сообщении"""
+        self.welcome_messages[chat_id] = {
+            'message_id': message_id,
+            'timestamp': datetime.now()
+        }
+
     async def start(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Обработчик команды /start"""
+        # Запускаем задачу очистки приветственных сообщений при первом использовании
+        if self.cleanup_task is None or self.cleanup_task.done():
+            self.start_cleanup_task()
+
         user = update.effective_user
         db.add_user(user.id, user.username, user.first_name, user.last_name)
 
@@ -135,7 +220,15 @@ class TelegramBot:
             try:
                 target_user_id = int(target_user)
                 user_info = db.get_user_info(target_user_id)
+                achievements = db.get_user_achievements(target_user_id)
+                total_donations = db.get_total_donations(target_user_id)
                 if user_info:
+                    # Формируем строку значков
+                    badge_str = ""
+                    for achievement_type, _ in achievements:
+                        if achievement_type in ACHIEVEMENT_BADGES:
+                            badge_str += ACHIEVEMENT_BADGES[achievement_type] + " "
+
                     info_text = f"""
 👤 <b>Информация о пользователе:</b>
 
@@ -155,6 +248,8 @@ ID: {user_info['ID']}
 Очки: {user_info['Очки']}
 Предупреждений: {user_info['Предупреждений']}
 Роль: {user_info['Роль']}
+{f"🏆 Достижения: {badge_str.strip()}" if badge_str else ""}
+{f"💰 Всего донатов: {total_donations} RUB" if total_donations > 0 else ""}
                     """
                 else:
                     info_text = f"Пользователь с ID {target_user_id} не найден."
@@ -164,8 +259,23 @@ ID: {user_info['ID']}
             # Обычный пользователь запрашивает свою информацию
             db.add_user(user.id, user.username, user.first_name, user.last_name)
             user_info = db.get_user_info(user.id)
+            achievements = db.get_user_achievements(user.id)
+            total_donations = db.get_total_donations(user.id)
 
             if user_info:
+                # Формируем строку значков
+                badge_str = ""
+                achievement_list = []
+                for achievement_type, unlocked_at in achievements:
+                    if achievement_type in ACHIEVEMENT_BADGES:
+                        badge_str += ACHIEVEMENT_BADGES[achievement_type] + " "
+                        achievement_list.append(f"{ACHIEVEMENT_BADGES[achievement_type]} {achievement_type.replace('_', ' ').title()}")
+
+                # Создаем список достижений отдельно
+                achievements_text = ""
+                if achievement_list:
+                    achievements_text = f"\n📋 Список достижений:\n" + '\n'.join(achievement_list)
+
                 info_text = f"""
 👤 <b>Информация о вас:</b>
 
@@ -185,6 +295,9 @@ ID: {user_info['ID']}
 Очки: {user_info['Очки']}
 Предупреждений: {user_info['Предупреждений']}
 Роль: {user_info['Роль']}
+{f"🏆 Достижения: {badge_str.strip()}" if badge_str else ""}
+{f"💰 Всего донатов: {total_donations} RUB" if total_donations > 0 else ""}
+{achievements_text}
                 """
             else:
                 info_text = USER_MESSAGES['info_not_found']
@@ -263,15 +376,10 @@ ID: {user_info['ID']}
             [InlineKeyboardButton("Камень-ножницы-бумага", callback_data='game_rps')],
             [InlineKeyboardButton("Крестики-нолики", callback_data='game_tic_tac_toe')],
             [InlineKeyboardButton("Викторина", callback_data='game_quiz')],
-            [InlineKeyboardButton("⬅️ Назад", callback_data='cmd_start')]
-        ]
-        reply_markup = InlineKeyboardMarkup(keyboard)
-
-        keyboard = [
-            [InlineKeyboardButton("Камень-ножницы-бумага", callback_data='game_rps')],
-            [InlineKeyboardButton("Крестики-нолики", callback_data='game_tic_tac_toe')],
-            [InlineKeyboardButton("Викторина", callback_data='game_quiz')],
             [InlineKeyboardButton("Морской бой", callback_data='game_battleship')],
+            [InlineKeyboardButton("2048", callback_data='game_2048')],
+            [InlineKeyboardButton("Тетрис", callback_data='game_tetris')],
+            [InlineKeyboardButton("Змейка", callback_data='game_snake')],
             [InlineKeyboardButton("⬅️ Назад", callback_data='cmd_start')]
         ]
         reply_markup = InlineKeyboardMarkup(keyboard)
@@ -297,8 +405,20 @@ ID: {user_info['ID']}
             await self.start_quiz_game(query, context)
         elif query.data == 'game_battleship':
             await self.start_battleship_game(query, context)
+        elif query.data == 'game_2048':
+            await self.start_2048_game(query, context)
+        elif query.data == 'game_tetris':
+            await self.start_tetris_game(query, context)
+        elif query.data == 'game_snake':
+            await self.start_snake_game(query, context)
         elif query.data.startswith('bs_'):
             await self.handle_battleship_shot(query, context)
+        elif query.data.startswith('2048_'):
+            await self.handle_2048_move(query, context)
+        elif query.data.startswith('tetris_'):
+            await self.handle_tetris_move(query, context)
+        elif query.data.startswith('snake_'):
+            await self.handle_snake_move(query, context)
         elif query.data.startswith('rps_'):
             await self.handle_rps(query, context)
         elif query.data.startswith('tictactoe_'):
@@ -313,6 +433,8 @@ ID: {user_info['ID']}
             await self.add_schedule_image(query, context)
         elif query.data == 'cancel_schedule':
             await self.cancel_schedule_post(query, context)
+        elif query.data.startswith('donate_'):
+            await self.handle_donation_callback(query, context)
 
 
     async def start_rps_game(self, query, context):
@@ -1176,7 +1298,17 @@ ID: {user_info['ID']}
             await self.handle_text_edit(update, context)
             return
 
+        # Проверяем, ждет ли пользователь ввода суммы доната
+        if context.user_data.get('waiting_for_donation_amount'):
+            await self.handle_donation_amount_input(update, context)
+            return
+
         message_text = update.message.text.lower()
+
+        # Автофильтр нецензурной лексики
+        if self.check_profanity(message_text):
+            await self.handle_profanity_violation(update, user)
+            return
 
         # Добавление пользователя в базу данных
         db.add_user(user.id, user.username, user.first_name, user.last_name)
@@ -1261,14 +1393,103 @@ ID: {user_info['ID']}
 
         context.user_data.pop('waiting_for_text_edit', None)
 
+    async def handle_donation_amount_input(self, update, context):
+        """Обработка ввода суммы доната"""
+        try:
+            amount = float(update.message.text.strip())
+            if amount <= 0:
+                raise ValueError()
+
+            user = update.effective_user
+
+            # Сохраняем донат в базу данных
+            if db.add_donation(user.id, amount):
+                points = int(amount // 100)
+                await update.message.reply_text(
+                    DONATION_MESSAGES['donate_success'].format(
+                        amount=amount,
+                        currency='RUB',
+                        points=points
+                    ),
+                    parse_mode='HTML'
+                )
+
+                # Проверяем достижения
+                current_year = datetime.now().year
+                total_yearly = db.get_total_donations(user.id, current_year)
+                achievements = db.check_and_unlock_achievements(user.id, donations=total_yearly)
+
+                # Сообщаем о новых достижениях
+                for achievement in achievements:
+                    if achievement in ACHIEVEMENT_MESSAGES:
+                        await update.effective_chat.send_message(
+                            ACHIEVEMENT_MESSAGES[achievement].format(name=user.first_name),
+                            parse_mode='HTML'
+                        )
+            else:
+                await update.message.reply_text(DONATION_MESSAGES['donate_error'])
+
+        except ValueError:
+            await update.message.reply_text("❌ Неверная сумма! Введите положительное число.")
+
+        context.user_data.pop('waiting_for_donation_amount', None)
+
     async def handle_new_chat_members(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Обработка новых участников чата"""
-        for member in update.chat_member.new_chat_members:
-            db.add_user(member.id, member.username, member.first_name, member.last_name)
+        chat_id = update.effective_chat.id
 
-            welcome_text = USER_MESSAGES['welcome_new_user'].format(name=member.first_name)
+        # Удаляем предыдущее приветственное сообщение, если оно есть
+        await self.delete_welcome_message(chat_id)
 
-            await update.effective_chat.send_message(welcome_text)
+        # Создаем новое приветственное сообщение с правилами и кнопками донатов
+        welcome_text = self.get_welcome_message_with_rules()
+
+        # Создаем клавиатуру с кнопками донатов
+        donation_keyboard = [
+            [InlineKeyboardButton("💰 100 ₽", callback_data='donate_100')],
+            [InlineKeyboardButton("💰 500 ₽", callback_data='donate_500')],
+            [InlineKeyboardButton("💰 1000 ₽", callback_data='donate_1000')],
+            [InlineKeyboardButton("🎯 Помощь", callback_data='cmd_help')]
+        ]
+        reply_markup = InlineKeyboardMarkup(donation_keyboard)
+
+        try:
+            message = await update.effective_chat.send_message(welcome_text, parse_mode='HTML', reply_markup=reply_markup)
+            # Сохраняем информацию о сообщении для автодаления
+            await self.set_welcome_message(chat_id, message.message_id)
+
+            # Обрабатываем каждого нового участника
+            for member in update.chat_member.new_chat_members:
+                db.add_user(member.id, member.username, member.first_name, member.last_name)
+
+                # Начисление очков за вступление в чат
+                db.update_score(member.id, SCORE_VALUES['join_chat'])
+
+                # Обновление репутации за вступление в чат
+                db.update_reputation(member.id, SCORE_VALUES['reputation_per_message'])
+
+        except Exception as e:
+            print(f"Ошибка при отправке приветственного сообщения: {e}")
+
+    def get_welcome_message_with_rules(self):
+        """Генерация приветственного сообщения с правилами группы"""
+        welcome_text = """🎉 <b>Добро пожаловать в нашу группу!</b>
+
+👋 Приветствуем всех новых участников!
+
+📋 <b>Правила нашей группы:</b>
+• Соблюдайте уважительное общение
+• Не используйте нецензурную лексику
+• Спам и реклама запрещены
+• Уважайте мнение других участников
+• Используйте /help для получения справки о командах бота
+
+🎮 В группе работает система рейтингов и игр!
+🏆 Используйте /rank для просмотра вашего рейтинга
+
+💰 <b>Поддержите проект:</b>
+Если вам нравится бот, вы можете поддержать его развитие!"""
+        return welcome_text
 
     async def handle_inline_query(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Обработка инлайновых запросов"""
@@ -1357,6 +1578,9 @@ ID: {user_info['ID']}
             [InlineKeyboardButton("Крестики-нолики", callback_data='game_tic_tac_toe')],
             [InlineKeyboardButton("Викторина", callback_data='game_quiz')],
             [InlineKeyboardButton("Морской бой", callback_data='game_battleship')],
+            [InlineKeyboardButton("2048", callback_data='game_2048')],
+            [InlineKeyboardButton("Тетрис", callback_data='game_tetris')],
+            [InlineKeyboardButton("Змейка", callback_data='game_snake')],
             [InlineKeyboardButton("⬅️ Назад", callback_data='cmd_start')]
         ]
         reply_markup = InlineKeyboardMarkup(keyboard)
@@ -1429,6 +1653,608 @@ ID: {user_info['ID']}
         context.user_data.pop('waiting_for_image', None)
 
         await query.edit_message_text("❌ Планирование поста отменено.")
+
+    # ===== НОВЫЕ ИГРЫ =====
+
+    async def start_2048_game(self, query, context):
+        """Запуск игры 2048"""
+        # Инициализация поля 4x4
+        board = [[0 for _ in range(4)] for _ in range(4)]
+
+        # Добавляем два начальных числа
+        self.add_random_tile(board)
+        self.add_random_tile(board)
+
+        context.user_data['2048_board'] = board
+        context.user_data['2048_score'] = 0
+
+        keyboard = self.create_2048_keyboard(board, 0)
+        reply_markup = InlineKeyboardMarkup(keyboard)
+
+        await query.edit_message_text(GAME_MESSAGES['2048_start'], reply_markup=reply_markup, parse_mode='HTML')
+
+    async def start_tetris_game(self, query, context):
+        """Запуск игры Тетрис"""
+        # Инициализация поля 10x20 (ширина x высота)
+        board = [[0 for _ in range(10)] for _ in range(20)]
+        current_piece = self.get_random_tetris_piece()
+        context.user_data['tetris_board'] = board
+        context.user_data['tetris_current_piece'] = current_piece
+        context.user_data['tetris_score'] = 0
+        context.user_data['tetris_lines'] = 0
+
+        keyboard = self.create_tetris_keyboard(board, current_piece, 0, 0)
+        reply_markup = InlineKeyboardMarkup(keyboard)
+
+        await query.edit_message_text(GAME_MESSAGES['tetris_start'], reply_markup=reply_markup, parse_mode='HTML')
+
+    async def start_snake_game(self, query, context):
+        """Запуск игры Змейка"""
+        # Инициализация поля 10x10
+        board = [[0 for _ in range(10)] for _ in range(10)]
+        snake = [(5, 5)]  # Начальная позиция змейки
+        food = self.place_food(board, snake)
+        direction = 'right'
+
+        context.user_data['snake_board'] = board
+        context.user_data['snake_body'] = snake
+        context.user_data['snake_food'] = food
+        context.user_data['snake_direction'] = direction
+        context.user_data['snake_score'] = 0
+
+        keyboard = self.create_snake_keyboard(board, snake, food, 0)
+        reply_markup = InlineKeyboardMarkup(keyboard)
+
+        await query.edit_message_text(GAME_MESSAGES['snake_start'], reply_markup=reply_markup, parse_mode='HTML')
+
+    async def handle_2048_move(self, query, context):
+        """Обработка ходов в игре 2048"""
+        move = query.data.split('_')[1]
+
+        board = context.user_data.get('2048_board')
+        score = context.user_data.get('2048_score', 0)
+
+        if not board:
+            await query.answer("Игра не найдена")
+            return
+
+        moved, new_score = self.move_2048(board, move)
+        score += new_score
+
+        if moved:
+            self.add_random_tile(board)
+            context.user_data['2048_score'] = score
+
+            # Проверяем победу
+            if self.check_2048_win(board):
+                db.update_score(query.from_user.id, 20)
+                keyboard = self.create_2048_keyboard(board, score, game_over=True)
+                reply_markup = InlineKeyboardMarkup(keyboard)
+                await query.edit_message_text(GAME_MESSAGES['2048_win'], reply_markup=reply_markup)
+                return
+
+            # Проверяем окончание игры
+            if not self.can_move_2048(board):
+                keyboard = self.create_2048_keyboard(board, score, game_over=True)
+                reply_markup = InlineKeyboardMarkup(keyboard)
+                await query.edit_message_text(GAME_MESSAGES['2048_game_over'], reply_markup=reply_markup)
+                return
+
+            keyboard = self.create_2048_keyboard(board, score)
+            reply_markup = InlineKeyboardMarkup(keyboard)
+            await query.edit_message_text(GAME_MESSAGES['2048_start'], reply_markup=reply_markup, parse_mode='HTML')
+        else:
+            await query.answer("Невозможный ход!")
+
+    async def handle_tetris_move(self, query, context):
+        """Обработка ходов в игре Тетрис"""
+        move = query.data.split('_')[1]
+
+        board = context.user_data.get('tetris_board')
+        piece = context.user_data.get('tetris_current_piece')
+        score = context.user_data.get('tetris_score', 0)
+        lines = context.user_data.get('tetris_lines', 0)
+
+        if not board or not piece:
+            await query.answer("Игра не найдена")
+            return
+
+        # Обработка движений
+        if move == 'left':
+            piece['x'] -= 1
+            if not self.is_valid_position(board, piece):
+                piece['x'] += 1
+        elif move == 'right':
+            piece['x'] += 1
+            if not self.is_valid_position(board, piece):
+                piece['x'] -= 1
+        elif move == 'down':
+            piece['y'] += 1
+            if not self.is_valid_position(board, piece):
+                piece['y'] -= 1
+                # Фиксируем фигуру и создаем новую
+                self.place_piece(board, piece)
+                lines_cleared = self.clear_lines(board)
+                score += lines_cleared * 10
+                lines += lines_cleared
+
+                new_piece = self.get_random_tetris_piece()
+                if not self.is_valid_position(board, new_piece):
+                    # Игра окончена
+                    keyboard = self.create_tetris_keyboard(board, piece, score, lines, game_over=True)
+                    reply_markup = InlineKeyboardMarkup(keyboard)
+                    await query.edit_message_text(GAME_MESSAGES['tetris_game_over'].format(score=score), reply_markup=reply_markup)
+                    return
+                piece = new_piece
+        elif move == 'rotate':
+            old_shape = piece['shape'][:]
+            piece['shape'] = list(zip(*piece['shape'][::-1]))
+            if not self.is_valid_position(board, piece):
+                piece['shape'] = old_shape
+
+        context.user_data['tetris_current_piece'] = piece
+        context.user_data['tetris_score'] = score
+        context.user_data['tetris_lines'] = lines
+
+        keyboard = self.create_tetris_keyboard(board, piece, score, lines)
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        await query.edit_message_text(GAME_MESSAGES['tetris_start'], reply_markup=reply_markup, parse_mode='HTML')
+
+    async def handle_snake_move(self, query, context):
+        """Обработка движений в игре Змейка"""
+        new_direction = query.data.split('_')[1]
+
+        board = context.user_data.get('snake_board')
+        snake = context.user_data.get('snake_body')
+        food = context.user_data.get('snake_food')
+        direction = context.user_data.get('snake_direction', 'right')
+        score = context.user_data.get('snake_score', 0)
+
+        if not board or not snake:
+            await query.answer("Игра не найдена")
+            return
+
+        # Не позволяем двигаться в обратном направлении
+        opposites = {'up': 'down', 'down': 'up', 'left': 'right', 'right': 'left'}
+        if new_direction == opposites.get(direction):
+            await query.answer("Невозможное направление!")
+            return
+
+        # Двигаем змейку
+        head = snake[0]
+        if new_direction == 'up':
+            new_head = (head[0] - 1, head[1])
+        elif new_direction == 'down':
+            new_head = (head[0] + 1, head[1])
+        elif new_direction == 'left':
+            new_head = (head[0], head[1] - 1)
+        elif new_direction == 'right':
+            new_head = (head[0], head[1] + 1)
+
+        # Проверяем столкновения
+        if (new_head[0] < 0 or new_head[0] >= 10 or
+            new_head[1] < 0 or new_head[1] >= 10 or
+            new_head in snake):
+            # Игра окончена
+            db.update_score(query.from_user.id, score)
+            keyboard = self.create_snake_keyboard(board, snake, food, score, game_over=True)
+            reply_markup = InlineKeyboardMarkup(keyboard)
+            await query.edit_message_text(GAME_MESSAGES['snake_game_over'].format(length=len(snake), score=score), reply_markup=reply_markup)
+            return
+
+        snake.insert(0, new_head)
+
+        # Проверяем еду
+        if new_head == food:
+            score += 10
+            food = self.place_food(board, snake)
+        else:
+            snake.pop()  # Удаляем хвост
+
+        context.user_data['snake_body'] = snake
+        context.user_data['snake_food'] = food
+        context.user_data['snake_direction'] = new_direction
+        context.user_data['snake_score'] = score
+
+        keyboard = self.create_snake_keyboard(board, snake, food, score)
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        await query.edit_message_text(GAME_MESSAGES['snake_start'], reply_markup=reply_markup, parse_mode='HTML')
+
+    # ===== ДОНАТЫ И ДОСТИЖЕНИЯ =====
+
+    async def donate(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Команда доната"""
+        keyboard = [
+            [InlineKeyboardButton("100 ₽", callback_data='donate_100')],
+            [InlineKeyboardButton("500 ₽", callback_data='donate_500')],
+            [InlineKeyboardButton("1000 ₽", callback_data='donate_1000')],
+            [InlineKeyboardButton("2500 ₽", callback_data='donate_2500')],
+            [InlineKeyboardButton("5000 ₽", callback_data='donate_5000')],
+            [InlineKeyboardButton("Другая сумма", callback_data='donate_custom')]
+        ]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+
+        await update.message.reply_text(
+            DONATION_MESSAGES['donate_welcome'],
+            reply_markup=reply_markup,
+            parse_mode='HTML'
+        )
+
+    async def handle_voice_message(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Обработка голосовых сообщений"""
+        user = update.effective_user
+        voice = update.message.voice
+
+        # Добавление пользователя в базу данных
+        db.add_user(user.id, user.username, user.first_name, user.last_name)
+
+        # Начисление очков за голосовое сообщение
+        db.update_score(user.id, SCORE_VALUES['message'])
+
+        duration = voice.duration
+
+        # Попытка транскрибации голосового сообщения
+        transcription = await self.transcribe_voice_message(voice, update)
+
+        await update.message.reply_text(
+            f"🎤 Голосовое сообщение от {user.first_name} ({duration} сек)\n\n"
+            f"🔄 Транскрибация: {transcription}\n\n"
+            f"💡 +1 очко за активность!",
+            reply_to_message_id=update.message.message_id
+        )
+
+    async def transcribe_voice_message(self, voice, update):
+        """Транскрибация голосового сообщения с использованием speech recognition"""
+        if not SPEECH_RECOGNITION_AVAILABLE:
+            return "[Speech Recognition не установлен. Установите: pip install SpeechRecognition]"
+
+        try:
+            # Создаем временный файл для загрузки аудио
+            with tempfile.NamedTemporaryFile(suffix='.ogg', delete=False) as temp_ogg:
+                temp_ogg_path = temp_ogg.name
+
+            # Скачиваем голосовое сообщение
+            voice_file = await voice.get_file()
+            await voice_file.download_to_drive(temp_ogg_path)
+
+            # Конвертируем OGG в WAV для speech_recognition
+            temp_wav_path = temp_ogg_path.replace('.ogg', '.wav')
+
+            if PYDUB_AVAILABLE:
+                # Используем pydub для конвертации
+                audio = AudioSegment.from_ogg(temp_ogg_path)
+                audio.export(temp_wav_path, format='wav')
+            else:
+                # Используем ffmpeg для конвертации (если доступен)
+                try:
+                    subprocess.run([
+                        'ffmpeg', '-i', temp_ogg_path, '-acodec', 'pcm_s16le',
+                        '-ar', '16000', '-ac', '1', temp_wav_path
+                    ], check=True, capture_output=True)
+                except (subprocess.CalledProcessError, FileNotFoundError):
+                    # Очищаем временные файлы и возвращаем ошибку
+                    os.unlink(temp_ogg_path)
+                    return "[невозможно конвертировать аудио - установите ffmpeg или pydub]\n💡 Для полной работы: pip install SpeechRecognition pydub ffmpeg-python"
+
+            # Распознавание речи
+            recognizer = sr.Recognizer()
+
+            with sr.AudioFile(temp_wav_path) as source:
+                audio_data = recognizer.record(source)
+
+                # Пробуем разные API для распознавания
+                try:
+                    # Сначала пробуем Google Speech Recognition (бесплатно)
+                    text = recognizer.recognize_google(audio_data, language='ru-RU')
+                    return text
+                except sr.UnknownValueError:
+                    return "[не удалось распознать речь]"
+                except sr.RequestError:
+                    # Если Google API недоступен, пробуем Sphinx (локальный, но менее точный)
+                    try:
+                        text = recognizer.recognize_sphinx(audio_data, language='ru-RU')
+                        return text
+                    except sr.UnknownValueError:
+                        return "[не удалось распознать речь (локально)]"
+                    except sr.RequestError:
+                        return "[сервисы распознавания речи недоступны]"
+
+        except Exception as e:
+            print(f"Ошибка при транскрибации: {e}")
+            return "[ошибка при обработке голосового сообщения]"
+
+        finally:
+            # Очищаем временные файлы
+            try:
+                if 'temp_ogg_path' in locals():
+                    os.unlink(temp_ogg_path)
+                if 'temp_wav_path' in locals():
+                    os.unlink(temp_wav_path)
+            except:
+                pass
+
+    # ===== ВСПОМОГАТЕЛЬНЫЕ МЕТОДЫ ДЛЯ ИГР =====
+
+    def add_random_tile(self, board):
+        """Добавляет случайную плитку (2 или 4) в пустую клетку"""
+        empty_cells = [(i, j) for i in range(4) for j in range(4) if board[i][j] == 0]
+        if empty_cells:
+            i, j = random.choice(empty_cells)
+            board[i][j] = 2 if random.random() < 0.9 else 4
+
+    def move_2048(self, board, direction):
+        """Двигает плитки в указанном направлении"""
+        def move_row_left(row):
+            """Двигает строку влево"""
+            new_row = [i for i in row if i != 0]
+            for i in range(len(new_row) - 1):
+                if new_row[i] == new_row[i + 1]:
+                    new_row[i] *= 2
+                    new_row[i + 1] = 0
+            new_row = [i for i in new_row if i != 0]
+            return new_row + [0] * (4 - len(new_row))
+
+        moved = False
+        score = 0
+
+        if direction == 'left':
+            for i in range(4):
+                old_row = board[i][:]
+                board[i] = move_row_left(board[i])
+                if board[i] != old_row:
+                    moved = True
+        elif direction == 'right':
+            for i in range(4):
+                old_row = board[i][:]
+                board[i] = move_row_left(board[i][::-1])[::-1]
+                if board[i] != old_row:
+                    moved = True
+        elif direction == 'up':
+            for j in range(4):
+                col = [board[i][j] for i in range(4)]
+                old_col = col[:]
+                new_col = move_row_left(col)
+                for i in range(4):
+                    board[i][j] = new_col[i]
+                if new_col != old_col:
+                    moved = True
+        elif direction == 'down':
+            for j in range(4):
+                col = [board[i][j] for i in range(4)]
+                old_col = col[:]
+                new_col = move_row_left(col[::-1])[::-1]
+                for i in range(4):
+                    board[i][j] = new_col[i]
+                if new_col != old_col:
+                    moved = True
+
+        return moved, score
+
+    def can_move_2048(self, board):
+        """Проверяет, возможны ли ходы"""
+        for i in range(4):
+            for j in range(4):
+                if board[i][j] == 0:
+                    return True
+                if i > 0 and board[i][j] == board[i-1][j]:
+                    return True
+                if j > 0 and board[i][j] == board[i][j-1]:
+                    return True
+        return False
+
+    def check_2048_win(self, board):
+        """Проверяет победу (наличие 2048)"""
+        return any(2048 in row for row in board)
+
+    def create_2048_keyboard(self, board, score, game_over=False):
+        """Создает клавиатуру для игры 2048"""
+        keyboard = []
+        for i in range(4):
+            row = []
+            for j in range(4):
+                cell = board[i][j]
+                text = str(cell) if cell != 0 else ' '
+                row.append(InlineKeyboardButton(text, callback_data=f'2048_cell_{i}_{j}'))
+            keyboard.append(row)
+
+        # Кнопки управления
+        keyboard.append([
+            InlineKeyboardButton("⬅️", callback_data='2048_left'),
+            InlineKeyboardButton("⬆️", callback_data='2048_up'),
+            InlineKeyboardButton("⬇️", callback_data='2048_down'),
+            InlineKeyboardButton("➡️", callback_data='2048_right')
+        ])
+
+        keyboard.append([
+            InlineKeyboardButton("🔄 Новая игра", callback_data='game_2048'),
+            InlineKeyboardButton("⬅️ Назад к играм", callback_data='cmd_play_game')
+        ])
+
+        return keyboard
+
+    def get_random_tetris_piece(self):
+        """Возвращает случайную тетрис-фигуру"""
+        pieces = [
+            {'shape': [[1, 1, 1, 1]], 'x': 3, 'y': 0},  # I
+            {'shape': [[1, 1], [1, 1]], 'x': 4, 'y': 0},  # O
+            {'shape': [[1, 0, 0], [1, 1, 1]], 'x': 3, 'y': 0},  # J
+            {'shape': [[0, 0, 1], [1, 1, 1]], 'x': 3, 'y': 0},  # L
+            {'shape': [[0, 1, 1], [1, 1, 0]], 'x': 3, 'y': 0},  # S
+            {'shape': [[1, 1, 0], [0, 1, 1]], 'x': 3, 'y': 0},  # Z
+            {'shape': [[0, 1, 0], [1, 1, 1]], 'x': 3, 'y': 0},  # T
+        ]
+        return random.choice(pieces)
+
+    def is_valid_position(self, board, piece):
+        """Проверяет, можно ли разместить фигуру в данной позиции"""
+        for i, row in enumerate(piece['shape']):
+            for j, cell in enumerate(row):
+                if cell:
+                    x, y = piece['x'] + j, piece['y'] + i
+                    if (x < 0 or x >= 10 or y >= 20 or
+                        (y >= 0 and board[y][x] != 0)):
+                        return False
+        return True
+
+    def place_piece(self, board, piece):
+        """Размещает фигуру на поле"""
+        for i, row in enumerate(piece['shape']):
+            for j, cell in enumerate(row):
+                if cell:
+                    x, y = piece['x'] + j, piece['y'] + i
+                    if 0 <= y < 20 and 0 <= x < 10:
+                        board[y][x] = 1
+
+    def clear_lines(self, board):
+        """Очищает заполненные линии"""
+        lines_cleared = 0
+        y = 19
+        while y >= 0:
+            if all(board[y]):
+                del board[y]
+                board.insert(0, [0] * 10)
+                lines_cleared += 1
+            else:
+                y -= 1
+        return lines_cleared
+
+    def create_tetris_keyboard(self, board, piece, score, lines, game_over=False):
+        """Создает клавиатуру для игры Тетрис"""
+        # Упрощенная визуализация - показываем только нижнюю часть поля
+        display_board = board[-10:] if len(board) > 10 else board
+
+        keyboard = []
+        for row in display_board:
+            display_row = []
+            for cell in row:
+                text = '⬛' if cell else '⬜'
+                display_row.append(InlineKeyboardButton(text, callback_data='tetris_display'))
+            keyboard.append(display_row)
+
+        # Кнопки управления
+        keyboard.append([
+            InlineKeyboardButton("⬅️", callback_data='tetris_left'),
+            InlineKeyboardButton("🔄", callback_data='tetris_rotate'),
+            InlineKeyboardButton("➡️", callback_data='tetris_right')
+        ])
+        keyboard.append([
+            InlineKeyboardButton("⬇️", callback_data='tetris_down'),
+            InlineKeyboardButton("🔄 Новая игра", callback_data='game_tetris'),
+            InlineKeyboardButton("⬅️ Назад к играм", callback_data='cmd_play_game')
+        ])
+
+        return keyboard
+
+    def place_food(self, board, snake):
+        """Размещает еду в случайной свободной клетке"""
+        empty_cells = [(i, j) for i in range(10) for j in range(10) if (i, j) not in snake]
+        if empty_cells:
+            return random.choice(empty_cells)
+        return None
+
+    def create_snake_keyboard(self, board, snake, food, score, game_over=False):
+        """Создает клавиатуру для игры Змейка"""
+        keyboard = []
+        for i in range(10):
+            row = []
+            for j in range(10):
+                if (i, j) == food:
+                    text = '🍎'
+                elif (i, j) in snake:
+                    text = '🟢' if (i, j) == snake[0] else '🟩'
+                else:
+                    text = '⬜'
+                row.append(InlineKeyboardButton(text, callback_data=f'snake_cell_{i}_{j}'))
+            keyboard.append(row)
+
+        # Кнопки управления
+        keyboard.append([
+            InlineKeyboardButton("⬅️", callback_data='snake_left'),
+            InlineKeyboardButton("⬆️", callback_data='snake_up'),
+            InlineKeyboardButton("⬇️", callback_data='snake_down'),
+            InlineKeyboardButton("➡️", callback_data='snake_right')
+        ])
+
+        keyboard.append([
+            InlineKeyboardButton("🔄 Новая игра", callback_data='game_snake'),
+            InlineKeyboardButton("⬅️ Назад к играм", callback_data='cmd_play_game')
+        ])
+
+        return keyboard
+
+    def check_profanity(self, text):
+        """Проверка текста на наличие нецензурной лексики"""
+        text_lower = text.lower()
+        for word in PROFANITY_WORDS:
+            if word in text_lower:
+                return True
+        return False
+
+    async def handle_profanity_violation(self, update, user):
+        """Обработка нарушения с нецензурной лексикой"""
+        # Удаление сообщения с матом
+        try:
+            await update.message.delete()
+        except Exception as e:
+            print(f"Не удалось удалить сообщение: {e}")
+
+        # Отправка предупреждения в чат
+        username = user.username if user.username else user.first_name
+        await update.effective_chat.send_message(
+            MODERATION_MESSAGES['profanity_detected'].format(username=username),
+            parse_mode='HTML'
+        )
+
+        # Начисление предупреждения пользователю
+        db.add_warning(user.id, "Нецензурная лексика", 0)  # 0 - системное предупреждение
+
+    async def handle_donation_callback(self, query, context):
+        """Обработка callback'ов донатов"""
+        await query.answer()
+
+        amount_str = query.data.split('_')[1]
+        if amount_str == 'custom':
+            # Запрос ввода суммы
+            await query.edit_message_text(
+                "💰 Введите сумму доната в рублях:",
+                reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("❌ Отмена", callback_data='donate_cancel')]])
+            )
+            context.user_data['waiting_for_donation_amount'] = True
+            return
+
+        try:
+            amount = float(amount_str)
+            user = query.from_user
+
+            # Сохраняем донат в базу данных
+            if db.add_donation(user.id, amount):
+                points = int(amount // 100)
+                await query.edit_message_text(
+                    DONATION_MESSAGES['donate_success'].format(
+                        amount=amount,
+                        currency='RUB',
+                        points=points
+                    ),
+                    parse_mode='HTML'
+                )
+
+                # Проверяем достижения
+                current_year = datetime.now().year
+                total_yearly = db.get_total_donations(user.id, current_year)
+                achievements = db.check_and_unlock_achievements(user.id, donations=total_yearly)
+
+                # Сообщаем о новых достижениях
+                for achievement in achievements:
+                    if achievement in ACHIEVEMENT_MESSAGES:
+                        await query.message.chat.send_message(
+                            ACHIEVEMENT_MESSAGES[achievement].format(name=user.first_name),
+                            parse_mode='HTML'
+                        )
+            else:
+                await query.edit_message_text(DONATION_MESSAGES['donate_error'])
+
+        except ValueError:
+            await query.edit_message_text("❌ Неверная сумма!")
 
     def run(self):
         """Запуск бота"""

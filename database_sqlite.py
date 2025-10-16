@@ -87,6 +87,29 @@ class Database:
                 )
             """)
 
+            # Таблица достижений
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS achievements (
+                    achievement_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    user_id INTEGER,
+                    achievement_type TEXT NOT NULL,
+                    unlocked_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    FOREIGN KEY (user_id) REFERENCES users (user_id)
+                )
+            """)
+
+            # Таблица донатов
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS donations (
+                    donation_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    user_id INTEGER,
+                    amount REAL NOT NULL,
+                    currency TEXT DEFAULT 'RUB',
+                    donated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    FOREIGN KEY (user_id) REFERENCES users (user_id)
+                )
+            """)
+
             self.connection.commit()
             print(TECH_MESSAGES['db_tables_created'])
         except sqlite3.Error as error:
@@ -395,6 +418,133 @@ class Database:
         except sqlite3.Error as error:
             print(f"Ошибка при удалении поста: {error}")
             return False
+
+    def unlock_achievement(self, user_id, achievement_type):
+        """Разблокировать достижение для пользователя"""
+        try:
+            cursor = self.connection.cursor()
+            cursor.execute("""
+                INSERT OR IGNORE INTO achievements (user_id, achievement_type)
+                VALUES (?, ?)
+            """, (user_id, achievement_type))
+            self.connection.commit()
+            return cursor.rowcount > 0  # True если достижение было разблокировано впервые
+        except sqlite3.Error as error:
+            print(f"Ошибка при разблокировке достижения: {error}")
+            return False
+
+    def get_user_achievements(self, user_id):
+        """Получить достижения пользователя"""
+        try:
+            cursor = self.connection.cursor()
+            cursor.execute("""
+                SELECT achievement_type, unlocked_at
+                FROM achievements
+                WHERE user_id = ?
+                ORDER BY unlocked_at DESC
+            """, (user_id,))
+            return cursor.fetchall()
+        except sqlite3.Error as error:
+            print(f"Ошибка при получении достижений: {error}")
+            return []
+
+    def add_donation(self, user_id, amount, currency='RUB'):
+        """Добавить донат пользователя"""
+        try:
+            cursor = self.connection.cursor()
+            cursor.execute("""
+                INSERT INTO donations (user_id, amount, currency)
+                VALUES (?, ?, ?)
+            """, (user_id, amount, currency))
+
+            # Начисляем очки за донат (1 очко за каждые 100 рублей)
+            points = int(amount // 100)
+            if points > 0:
+                self.update_score(user_id, points)
+
+            self.connection.commit()
+            return True
+        except sqlite3.Error as error:
+            print(f"Ошибка при добавлении доната: {error}")
+            return False
+
+    def get_total_donations(self, user_id, year=None):
+        """Получить общую сумму донатов пользователя"""
+        try:
+            cursor = self.connection.cursor()
+            if year:
+                cursor.execute("""
+                    SELECT SUM(amount) FROM donations
+                    WHERE user_id = ? AND strftime('%Y', donated_at) = ?
+                """, (user_id, str(year)))
+            else:
+                cursor.execute("""
+                    SELECT SUM(amount) FROM donations
+                    WHERE user_id = ?
+                """, (user_id,))
+            result = cursor.fetchone()
+            return result[0] if result[0] else 0
+        except sqlite3.Error as error:
+            print(f"Ошибка при получении донатов: {error}")
+            return 0
+
+    def check_and_unlock_achievements(self, user_id, message_count=None, games_won=None, donations=None):
+        """Проверяет и разблокирует достижения"""
+        achievements_unlocked = []
+
+        # Достижения за сообщения
+        if message_count is None:
+            user_info = self.get_user_info(user_id)
+            if user_info:
+                message_count = user_info['Количество сообщений']
+
+        if message_count >= 1:
+            # Проверяем, было ли уже разблокировано достижение первого сообщения
+            existing_achievements = self.get_user_achievements(user_id)
+            has_first_message = any(achievement[0] == 'first_message' for achievement in existing_achievements)
+
+            if not has_first_message:
+                if self.unlock_achievement(user_id, 'first_message'):
+                    achievements_unlocked.append('first_message')
+        if message_count >= 100:
+            existing_achievements = self.get_user_achievements(user_id)
+            has_100_messages = any(achievement[0] == '100_messages' for achievement in existing_achievements)
+            if not has_100_messages:
+                if self.unlock_achievement(user_id, '100_messages'):
+                    achievements_unlocked.append('100_messages')
+
+        if message_count >= 1000:
+            existing_achievements = self.get_user_achievements(user_id)
+            has_1000_messages = any(achievement[0] == '1000_messages' for achievement in existing_achievements)
+            if not has_1000_messages:
+                if self.unlock_achievement(user_id, '1000_messages'):
+                    achievements_unlocked.append('1000_messages')
+
+        # Достижения за игры
+        if games_won is None:
+            # Здесь можно добавить логику подсчета побед в играх
+            pass
+
+        if games_won and games_won >= 10:
+            existing_achievements = self.get_user_achievements(user_id)
+            has_games_master = any(achievement[0] == 'games_master' for achievement in existing_achievements)
+            if not has_games_master:
+                if self.unlock_achievement(user_id, 'games_master'):
+                    achievements_unlocked.append('games_master')
+
+        # Достижения за донаты
+        if donations is None:
+            current_year = datetime.now().year
+            donations = self.get_total_donations(user_id, current_year)
+
+        if donations >= 100000:  # 100k рублей в год
+            existing_achievements = self.get_user_achievements(user_id)
+            has_sponsor_year = any(achievement[0] == 'sponsor_year' for achievement in existing_achievements)
+            if not has_sponsor_year:
+                if self.unlock_achievement(user_id, 'sponsor_year'):
+                    achievements_unlocked.append('sponsor_year')
+
+        return achievements_unlocked
 
     def close(self):
         """Закрытие соединения с базой данных"""

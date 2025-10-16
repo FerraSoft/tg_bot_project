@@ -12,7 +12,7 @@ import sys
 from datetime import datetime
 from telegram import Bot
 from database_sqlite import Database
-from config import BOT_TOKEN
+from config_local import BOT_TOKEN
 from messages import TECH_MESSAGES, SCHEDULER_CONFIG
 
 # Настройка логирования
