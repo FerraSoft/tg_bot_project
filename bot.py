@@ -312,12 +312,46 @@ ID: {user_info['ID']}
 
         city = ' '.join(context.args) if context.args else 'Moscow'
 
+        # Валидация города
+        if not city or len(city.strip()) < 2:
+            await update.message.reply_text("❌ Название города должно содержать минимум 2 символа")
+            return
+
+        # Ограничиваем длину названия города для безопасности
+        if len(city) > 50:
+            await update.message.reply_text("❌ Название города слишком длинное (максимум 50 символов)")
+            return
+
         try:
+            # Добавляем таймаут для запроса
             url = f"http://api.openweathermap.org/data/2.5/weather?q={city}&appid={OPENWEATHER_API_KEY}&units=metric&lang=ru"
-            response = requests.get(url)
+
+            # Создаем сессию с таймаутом
+            import requests
+            response = requests.get(url, timeout=10)
+
+            # Проверяем статус код
+            if response.status_code == 401:
+                await update.message.reply_text("❌ Ошибка API: неверный ключ погоды")
+                return
+            elif response.status_code == 429:
+                await update.message.reply_text("❌ Превышен лимит запросов к API погоды. Попробуйте позже.")
+                return
+            elif response.status_code >= 500:
+                await update.message.reply_text("❌ Сервер погоды временно недоступен. Попробуйте позже.")
+                return
+            elif response.status_code != 200:
+                await update.message.reply_text("❌ Ошибка при получении данных о погоде")
+                return
+
             data = response.json()
 
-            if data['cod'] == 200:
+            if data.get('cod') == 200:
+                # Проверяем, что все необходимые данные присутствуют
+                if 'name' not in data or 'main' not in data or 'weather' not in data:
+                    await update.message.reply_text("❌ Неполные данные о погоде от сервера")
+                    return
+
                 weather_text = WEATHER_MESSAGES['weather_info'].format(
                     city=data['name'],
                     temp=data['main']['temp'],
@@ -325,12 +359,27 @@ ID: {user_info['ID']}
                     humidity=data['main']['humidity'],
                     description=data['weather'][0]['description']
                 )
+                await update.message.reply_text(weather_text, parse_mode='HTML')
             else:
-                weather_text = WEATHER_MESSAGES['city_not_found']
+                # Обработка различных кодов ошибок от API
+                if data.get('cod') == '404':
+                    await update.message.reply_text(f"❌ Город '{city}' не найден")
+                elif data.get('cod') == '401':
+                    await update.message.reply_text("❌ Ошибка авторизации API погоды")
+                else:
+                    await update.message.reply_text(f"❌ Ошибка API погоды: {data.get('message', 'Неизвестная ошибка')}")
 
-            await update.message.reply_text(weather_text, parse_mode='HTML')
+        except requests.exceptions.Timeout:
+            await update.message.reply_text("❌ Превышено время ожидания ответа от сервера погоды. Попробуйте позже.")
+        except requests.exceptions.ConnectionError:
+            await update.message.reply_text("❌ Ошибка подключения к серверу погоды. Проверьте интернет-соединение.")
+        except requests.exceptions.RequestException as e:
+            await update.message.reply_text(f"❌ Ошибка сети при получении погоды: {str(e)[:100]}")
+        except (KeyError, ValueError, TypeError) as e:
+            await update.message.reply_text(f"❌ Ошибка обработки данных погоды: {str(e)[:100]}")
         except Exception as e:
-            await update.message.reply_text(WEATHER_MESSAGES['weather_error'].format(error=e))
+            print(f"Неожиданная ошибка в weather: {e}")
+            await update.message.reply_text("❌ Неожиданная ошибка при получении погоды. Попробуйте позже.")
 
     async def news(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Получить новости"""
@@ -339,20 +388,81 @@ ID: {user_info['ID']}
             return
 
         try:
+            # Добавляем таймаут для запроса
             url = f"https://newsapi.org/v2/top-headlines?country=ru&apiKey={NEWS_API_KEY}"
-            response = requests.get(url)
+
+            # Создаем сессию с таймаутом
+            response = requests.get(url, timeout=10)
+
+            # Проверяем статус код
+            if response.status_code == 401:
+                await update.message.reply_text("❌ Ошибка API: неверный ключ новостей")
+                return
+            elif response.status_code == 429:
+                await update.message.reply_text("❌ Превышен лимит запросов к API новостей. Попробуйте позже.")
+                return
+            elif response.status_code >= 500:
+                await update.message.reply_text("❌ Сервер новостей временно недоступен. Попробуйте позже.")
+                return
+            elif response.status_code != 200:
+                await update.message.reply_text("❌ Ошибка при получении новостей")
+                return
+
             data = response.json()
 
-            if data['status'] == 'ok' and data['articles']:
-                news_text = NEWS_MESSAGES['news_title']
-                for i, article in enumerate(data['articles'][:5], 1):
-                    news_text += f"{i}. {article['title']}\n{article['url']}\n\n"
-            else:
-                news_text = NEWS_MESSAGES['news_not_found']
+            if data.get('status') == 'ok' and data.get('articles'):
+                # Проверяем, что статьи содержат необходимые поля
+                articles = data['articles'][:5]  # Берем только первые 5
+                valid_articles = []
 
-            await update.message.reply_text(news_text, parse_mode='HTML')
+                for article in articles:
+                    if article.get('title') and article.get('url'):
+                        valid_articles.append(article)
+
+                if not valid_articles:
+                    await update.message.reply_text("❌ Новости получены, но не содержат корректных данных")
+                    return
+
+                news_text = NEWS_MESSAGES['news_title']
+                for i, article in enumerate(valid_articles, 1):
+                    # Ограничиваем длину заголовка для безопасности
+                    title = article['title'][:200] if len(article['title']) > 200 else article['title']
+                    url = article['url'][:500] if len(article['url']) > 500 else article['url']  # Ограничиваем URL
+                    news_text += f"{i}. {title}\n{url}\n\n"
+
+                # Ограничиваем общую длину сообщения
+                if len(news_text) > 4000:
+                    news_text = news_text[:3997] + "..."
+
+                await update.message.reply_text(news_text, parse_mode='HTML')
+            else:
+                # Обработка различных ошибок от API
+                if data.get('status') == 'error':
+                    error_code = data.get('code', 'unknown')
+                    error_message = data.get('message', 'Неизвестная ошибка')
+
+                    if error_code == 'apiKeyInvalid':
+                        await update.message.reply_text("❌ Ошибка API: неверный ключ новостей")
+                    elif error_code == 'rateLimited':
+                        await update.message.reply_text("❌ Превышен лимит запросов к API новостей")
+                    elif error_code == 'sourcesUnavailable':
+                        await update.message.reply_text("❌ Источники новостей недоступны")
+                    else:
+                        await update.message.reply_text(f"❌ Ошибка API новостей: {error_message}")
+                else:
+                    await update.message.reply_text(NEWS_MESSAGES['news_not_found'])
+
+        except requests.exceptions.Timeout:
+            await update.message.reply_text("❌ Превышено время ожидания ответа от сервера новостей. Попробуйте позже.")
+        except requests.exceptions.ConnectionError:
+            await update.message.reply_text("❌ Ошибка подключения к серверу новостей. Проверьте интернет-соединение.")
+        except requests.exceptions.RequestException as e:
+            await update.message.reply_text(f"❌ Ошибка сети при получении новостей: {str(e)[:100]}")
+        except (KeyError, ValueError, TypeError) as e:
+            await update.message.reply_text(f"❌ Ошибка обработки данных новостей: {str(e)[:100]}")
         except Exception as e:
-            await update.message.reply_text(NEWS_MESSAGES['news_error'].format(error=e))
+            print(f"Неожиданная ошибка в news: {e}")
+            await update.message.reply_text("❌ Неожиданная ошибка при получении новостей. Попробуйте позже.")
 
     async def translate(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Перевод текста"""
@@ -363,12 +473,31 @@ ID: {user_info['ID']}
         text = ' '.join(context.args[:-1])
         target_lang = context.args[-1]
 
+        # Валидация входных данных
+        if not text or not text.strip():
+            await update.message.reply_text("❌ Текст для перевода не может быть пустым")
+            return
+
+        if not target_lang or len(target_lang) != 2:
+            await update.message.reply_text("❌ Укажите правильный код языка (например: en, ru, de)")
+            return
+
+        # Ограничиваем длину текста для безопасности и производительности
+        if len(text) > 1000:
+            await update.message.reply_text("❌ Текст слишком длинный для перевода (максимум 1000 символов)")
+            return
+
         # Простой перевод с помощью Google Translate API (нужен API ключ)
         try:
             # В реальном проекте используйте Google Translate API или другой сервис
-            await update.message.reply_text(TRANSLATE_MESSAGES['result'].format(text=text, lang=target_lang))
+            # Заглушка для демонстрации - в продакшене нужно реализовать реальный перевод
+            await update.message.reply_text(
+                f"🔄 Функция перевода: '{text[:50]}{'...' if len(text) > 50 else ''}' на {target_lang}\n\n"
+                f"💡 В текущей версии бота перевод недоступен. Интегрируйте Google Translate API или другой сервис перевода."
+            )
         except Exception as e:
-            await update.message.reply_text(TRANSLATE_MESSAGES['error'].format(error=e))
+            print(f"Ошибка в translate: {e}")
+            await update.message.reply_text("❌ Ошибка при переводе текста. Попробуйте позже.")
 
     async def play_game(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Запустить мини-игру"""
@@ -874,14 +1003,40 @@ ID: {user_info['ID']}
             await update.message.reply_text(MODERATION_MESSAGES['ban_usage'])
             return
 
-        user_id = context.args[0]
+        user_id_str = context.args[0]
         reason = ' '.join(context.args[1:])
 
+        # Валидация ID пользователя
         try:
-            await update.effective_chat.ban_member(int(user_id))
+            user_id = int(user_id_str)
+        except ValueError:
+            await update.message.reply_text("❌ Неверный формат ID пользователя. Должен быть числом.")
+            return
+
+        # Валидация причины
+        if not reason or not reason.strip():
+            await update.message.reply_text("❌ Укажите причину бана")
+            return
+
+        if len(reason) > 500:
+            await update.message.reply_text("❌ Причина слишком длинная (максимум 500 символов)")
+            return
+
+        # Проверка, что пользователь не пытается забанить себя
+        if user_id == update.effective_user.id:
+            await update.message.reply_text("❌ Вы не можете забанить самого себя")
+            return
+
+        # Проверка, что пользователь не пытается забанить бота
+        if user_id == context.bot.id:
+            await update.message.reply_text("❌ Вы не можете забанить бота")
+            return
+
+        try:
+            await update.effective_chat.ban_member(user_id)
             await update.message.reply_text(MODERATION_MESSAGES['user_banned'].format(user_id=user_id, reason=reason))
         except Exception as e:
-            await update.message.reply_text(MODERATION_MESSAGES['ban_error'].format(error=e))
+            await update.message.reply_text(f"❌ Ошибка при бане пользователя: {str(e)[:100]}")
 
     async def unban_user(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Разбанить пользователя (только админы)"""
@@ -911,11 +1066,40 @@ ID: {user_info['ID']}
             await update.message.reply_text(MODERATION_MESSAGES['mute_usage'])
             return
 
-        user_id = context.args[0]
+        user_id_str = context.args[0]
+        time_str = context.args[1]
+
+        # Валидация ID пользователя
         try:
-            mute_time = int(context.args[1])
+            user_id = int(user_id_str)
         except ValueError:
-            await update.message.reply_text(MODERATION_MESSAGES['mute_invalid_time'])
+            await update.message.reply_text("❌ Неверный формат ID пользователя. Должен быть числом.")
+            return
+
+        # Валидация времени
+        try:
+            mute_time = int(time_str)
+        except ValueError:
+            await update.message.reply_text("❌ Время должно быть числом в секундах.")
+            return
+
+        # Проверка диапазона времени
+        if mute_time < 1:
+            await update.message.reply_text("❌ Время должно быть положительным числом.")
+            return
+
+        if mute_time > 365 * 24 * 3600:  # Максимум 1 год
+            await update.message.reply_text("❌ Время не может превышать 1 год (31536000 секунд).")
+            return
+
+        # Проверка, что пользователь не пытается заглушить себя
+        if user_id == update.effective_user.id:
+            await update.message.reply_text("❌ Вы не можете заглушить самого себя")
+            return
+
+        # Проверка, что пользователь не пытается заглушить бота
+        if user_id == context.bot.id:
+            await update.message.reply_text("❌ Вы не можете заглушить бота")
             return
 
         from datetime import datetime, timedelta
@@ -923,13 +1107,13 @@ ID: {user_info['ID']}
 
         try:
             await update.effective_chat.restrict_member(
-                int(user_id),
+                user_id,
                 until_date=until_date,
                 can_send_messages=False
             )
             await update.message.reply_text(MODERATION_MESSAGES['user_muted'].format(user_id=user_id, time=mute_time))
         except Exception as e:
-            await update.message.reply_text(MODERATION_MESSAGES['mute_error'].format(error=e))
+            await update.message.reply_text(f"❌ Ошибка при заглушке пользователя: {str(e)[:100]}")
 
     async def unmute_user(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Снять заглушку с пользователя (только админы)"""
@@ -965,15 +1149,41 @@ ID: {user_info['ID']}
             await update.message.reply_text(MODERATION_MESSAGES['kick_usage'])
             return
 
-        user_id = context.args[0]
+        user_id_str = context.args[0]
         reason = ' '.join(context.args[1:])
 
+        # Валидация ID пользователя
         try:
-            await update.effective_chat.ban_member(int(user_id))
-            await update.effective_chat.unban_member(int(user_id))  # Разбан сразу после бана = кик
+            user_id = int(user_id_str)
+        except ValueError:
+            await update.message.reply_text("❌ Неверный формат ID пользователя. Должен быть числом.")
+            return
+
+        # Валидация причины
+        if not reason or not reason.strip():
+            await update.message.reply_text("❌ Укажите причину кика")
+            return
+
+        if len(reason) > 500:
+            await update.message.reply_text("❌ Причина слишком длинная (максимум 500 символов)")
+            return
+
+        # Проверка, что пользователь не пытается кикнуть себя
+        if user_id == update.effective_user.id:
+            await update.message.reply_text("❌ Вы не можете кикнуть самого себя")
+            return
+
+        # Проверка, что пользователь не пытается кикнуть бота
+        if user_id == context.bot.id:
+            await update.message.reply_text("❌ Вы не можете кикнуть бота")
+            return
+
+        try:
+            await update.effective_chat.ban_member(user_id)
+            await update.effective_chat.unban_member(user_id)  # Разбан сразу после бана = кик
             await update.message.reply_text(MODERATION_MESSAGES['user_kicked'].format(user_id=user_id, reason=reason))
         except Exception as e:
-            await update.message.reply_text(MODERATION_MESSAGES['kick_error'].format(error=e))
+            await update.message.reply_text(f"❌ Ошибка при кике пользователя: {str(e)[:100]}")
 
     async def promote_user(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Повысить пользователя до модератора (только админы)"""
@@ -1032,11 +1242,40 @@ ID: {user_info['ID']}
             await update.message.reply_text(MODERATION_MESSAGES['warn_usage'])
             return
 
-        user_id = context.args[0]
+        user_id_str = context.args[0]
         reason = ' '.join(context.args[1:])
 
-        db.add_warning(user_id, reason, update.effective_user.id)
-        await update.message.reply_text(MODERATION_MESSAGES['warning_issued'].format(user_id=user_id, reason=reason))
+        # Валидация ID пользователя
+        try:
+            user_id = int(user_id_str)
+        except ValueError:
+            await update.message.reply_text("❌ Неверный формат ID пользователя. Должен быть числом.")
+            return
+
+        # Валидация причины
+        if not reason or not reason.strip():
+            await update.message.reply_text("❌ Укажите причину предупреждения")
+            return
+
+        if len(reason) > 500:
+            await update.message.reply_text("❌ Причина слишком длинная (максимум 500 символов)")
+            return
+
+        # Проверка, что пользователь не пытается выдать предупреждение себе
+        if user_id == update.effective_user.id:
+            await update.message.reply_text("❌ Вы не можете выдать предупреждение самому себе")
+            return
+
+        # Проверка, что пользователь не пытается выдать предупреждение боту
+        if user_id == context.bot.id:
+            await update.message.reply_text("❌ Вы не можете выдать предупреждение боту")
+            return
+
+        try:
+            db.add_warning(user_id, reason, update.effective_user.id)
+            await update.message.reply_text(MODERATION_MESSAGES['warning_issued'].format(user_id=user_id, reason=reason))
+        except Exception as e:
+            await update.message.reply_text(f"❌ Ошибка при выдаче предупреждения: {str(e)[:100]}")
 
     async def ranks_info(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Показать информацию о системе рангов"""
@@ -1053,6 +1292,22 @@ ID: {user_info['ID']}
             return
 
         csv_file = context.args[0] if context.args else 'chat_-1001519866478_users_full_20251014.csv'
+
+        # Валидация имени файла
+        if not csv_file or not csv_file.strip():
+            await update.message.reply_text("❌ Укажите имя CSV файла")
+            return
+
+        # Проверка на потенциально опасные символы в имени файла
+        import re
+        if not re.match(r'^[a-zA-Z0-9._\-/\s]+$', csv_file):
+            await update.message.reply_text("❌ Имя файла содержит недопустимые символы")
+            return
+
+        # Ограничение длины имени файла
+        if len(csv_file) > 255:
+            await update.message.reply_text("❌ Имя файла слишком длинное (максимум 255 символов)")
+            return
 
         # Если путь относительный, добавляем путь к директории telegram_bot
         if not os.path.isabs(csv_file):
@@ -1093,14 +1348,38 @@ ID: {user_info['ID']}
         time_str = args[0]
         text = ' '.join(args[1:])
 
+        # Валидация текста поста
+        if not text or not text.strip():
+            await update.message.reply_text("❌ Текст поста не может быть пустым")
+            return
+
+        if len(text) > 4000:
+            await update.message.reply_text("❌ Текст поста слишком длинный (максимум 4000 символов)")
+            return
+
+        # Валидация времени
+        if not time_str or not time_str.strip():
+            await update.message.reply_text("❌ Укажите время публикации")
+            return
+
+        if len(time_str) > 100:
+            await update.message.reply_text("❌ Строка времени слишком длинная")
+            return
+
         try:
             schedule_time = self.parse_schedule_time(time_str)
         except ValueError as e:
-            await update.message.reply_text(SCHEDULER_MESSAGES['invalid_format'].format(error=str(e)))
+            await update.message.reply_text(f"❌ Ошибка формата времени: {str(e)[:100]}")
             return
 
         if schedule_time <= datetime.now():
             await update.message.reply_text(SCHEDULER_MESSAGES['time_in_past'])
+            return
+
+        # Проверка, что время не слишком далеко в будущем (максимум 1 год)
+        max_future_time = datetime.now() + timedelta(days=365)
+        if schedule_time > max_future_time:
+            await update.message.reply_text("❌ Время публикации не может быть больше чем через 1 год")
             return
 
         # Показываем предварительный просмотр поста
@@ -1177,10 +1456,22 @@ ID: {user_info['ID']}
             await update.message.reply_text(SCHEDULER_MESSAGES['usage_delete'])
             return
 
+        post_id_str = context.args[0]
+
+        # Валидация ID поста
         try:
-            post_id = int(context.args[0])
+            post_id = int(post_id_str)
         except ValueError:
-            await update.message.reply_text(SCHEDULER_MESSAGES['invalid_id'])
+            await update.message.reply_text("❌ ID поста должен быть числом")
+            return
+
+        # Проверка диапазона ID
+        if post_id < 1:
+            await update.message.reply_text("❌ ID поста должен быть положительным числом")
+            return
+
+        if post_id > 999999999:  # Разумный максимум для SQLite
+            await update.message.reply_text("❌ ID поста слишком большой")
             return
 
         success = db.delete_scheduled_post(post_id, user.id)
@@ -1203,10 +1494,22 @@ ID: {user_info['ID']}
             await update.message.reply_text(SCHEDULER_MESSAGES['usage_publish'])
             return
 
+        post_id_str = context.args[0]
+
+        # Валидация ID поста
         try:
-            post_id = int(context.args[0])
+            post_id = int(post_id_str)
         except ValueError:
-            await update.message.reply_text(SCHEDULER_MESSAGES['invalid_id'])
+            await update.message.reply_text("❌ ID поста должен быть числом")
+            return
+
+        # Проверка диапазона ID
+        if post_id < 1:
+            await update.message.reply_text("❌ ID поста должен быть положительным числом")
+            return
+
+        if post_id > 999999999:  # Разумный максимум для SQLite
+            await update.message.reply_text("❌ ID поста слишком большой")
             return
 
         # Получаем пост из базы данных
@@ -1501,24 +1804,57 @@ ID: {user_info['ID']}
             if query.startswith('weather'):
                 city = query.split(' ', 1)[1] if len(query.split(' ', 1)) > 1 else 'Moscow'
 
-                if OPENWEATHER_API_KEY:
-                    url = f"http://api.openweathermap.org/data/2.5/weather?q={city}&appid={OPENWEATHER_API_KEY}&units=metric&lang=ru"
-                    response = requests.get(url)
-                    data = response.json()
+                # Валидация города
+                if not city or len(city.strip()) < 2:
+                    results.append(InlineQueryResultArticle(
+                        id='1',
+                        title="Ошибка",
+                        input_message_content=InputTextMessageContent("Название города должно содержать минимум 2 символа")
+                    ))
+                elif len(city) > 50:
+                    results.append(InlineQueryResultArticle(
+                        id='1',
+                        title="Ошибка",
+                        input_message_content=InputTextMessageContent("Название города слишком длинное")
+                    ))
+                elif OPENWEATHER_API_KEY:
+                    try:
+                        url = f"http://api.openweathermap.org/data/2.5/weather?q={city}&appid={OPENWEATHER_API_KEY}&units=metric&lang=ru"
+                        response = requests.get(url, timeout=5)
 
-                    if data['cod'] == 200:
-                        weather_text = f"🌤️ Погода в {data['name']}:\nТемпература: {data['main']['temp']}°C\nОщущается как: {data['main']['feels_like']}°C\nВлажность: {data['main']['humidity']}%\nОписание: {data['weather'][0]['description']}"
+                        if response.status_code == 200:
+                            data = response.json()
+                            if data.get('cod') == 200:
+                                weather_text = f"Погода в {data['name']}:\nТемпература: {data['main']['temp']}°C\nОщущается как: {data['main']['feels_like']}°C\nВлажность: {data['main']['humidity']}%\nОписание: {data['weather'][0]['description']}"
+                                results.append(InlineQueryResultArticle(
+                                    id='1',
+                                    title=f"Погода в {city}",
+                                    input_message_content=InputTextMessageContent(weather_text)
+                                ))
+                            else:
+                                results.append(InlineQueryResultArticle(
+                                    id='1',
+                                    title="Город не найден",
+                                    input_message_content=InputTextMessageContent(f"Город '{city}' не найден")
+                                ))
+                        else:
+                            results.append(InlineQueryResultArticle(
+                                id='1',
+                                title="Ошибка API",
+                                input_message_content=InputTextMessageContent("Ошибка при получении погоды")
+                            ))
+                    except Exception:
                         results.append(InlineQueryResultArticle(
                             id='1',
-                            title=f"Погода в {city}",
-                            input_message_content=InputTextMessageContent(weather_text)
+                            title="Ошибка сети",
+                            input_message_content=InputTextMessageContent("Ошибка подключения к серверу погоды")
                         ))
-                    else:
-                        results.append(InlineQueryResultArticle(
-                            id='1',
-                            title="Город не найден",
-                            input_message_content=InputTextMessageContent("Город не найден")
-                        ))
+                else:
+                    results.append(InlineQueryResultArticle(
+                        id='1',
+                        title="API недоступен",
+                        input_message_content=InputTextMessageContent("API погоды не настроен")
+                    ))
 
             elif query.startswith('translate'):
                 # Базовая заглушка для перевода
@@ -1526,17 +1862,33 @@ ID: {user_info['ID']}
                 if len(text_parts) >= 3:
                     text = text_parts[1]
                     lang = text_parts[2]
-                    result_text = f"Перевод '{text}' на {lang}: [здесь будет перевод]"
+
+                    if text and lang and len(text) <= 500 and len(lang) == 2:
+                        result_text = f"Перевод '{text[:50]}{'...' if len(text) > 50 else ''}' на {lang}\n[Функция перевода недоступна в текущей версии]"
+                        results.append(InlineQueryResultArticle(
+                            id='1',
+                            title=f"Перевод на {lang}",
+                            input_message_content=InputTextMessageContent(result_text)
+                        ))
+                    else:
+                        results.append(InlineQueryResultArticle(
+                            id='1',
+                            title="Ошибка",
+                            input_message_content=InputTextMessageContent("Использование: текст для перевода")
+                        ))
+                else:
                     results.append(InlineQueryResultArticle(
                         id='1',
-                        title=f"Перевод на {lang}",
-                        input_message_content=InputTextMessageContent(result_text)
+                        title="Использование",
+                        input_message_content=InputTextMessageContent("Использование: weather [город] или translate [текст] [язык]")
                     ))
 
             await update.inline_query.answer(results)
 
         except Exception as e:
             print(f"Ошибка при обработке инлайнового запроса: {e}")
+            # Пустой ответ в случае ошибки
+            await update.inline_query.answer([])
 
     async def show_start_menu(self, query):
         """Показать стартовое меню"""

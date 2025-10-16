@@ -130,26 +130,80 @@ class Database:
     def update_score(self, user_id, points=1):
         """Обновление очков пользователя"""
         try:
+            # Валидация входных данных
+            if not isinstance(user_id, int) or user_id <= 0:
+                print(f"Ошибка валидации: некорректный user_id = {user_id}")
+                return False
+
+            if not isinstance(points, (int, float)) or points < 0:
+                print(f"Ошибка валидации: некорректное количество очков = {points}")
+                return False
+
+            # Проверка соединения с базой данных
+            if not self.connection:
+                print("Ошибка: соединение с базой данных не установлено")
+                return False
+
             cursor = self.connection.cursor()
             cursor.execute("""
-                UPDATE users SET score = score + ?, message_count = message_count + 1, last_message = CURRENT_TIMESTAMP WHERE user_id = ?
-            """, (points, user_id))
+                UPDATE users SET score = score + ?, reputation = reputation + ?, message_count = message_count + 1, last_message = CURRENT_TIMESTAMP WHERE user_id = ?
+            """, (points, points, user_id))
+
+            if cursor.rowcount == 0:
+                print(f"Предупреждение: пользователь с ID {user_id} не найден для обновления очков")
+                return False
+
             self.connection.commit()
+            # Обновление ранга на основе репутации (которая теперь синхронизирована с очками)
+            self.update_rank(user_id)
+            return True
         except sqlite3.Error as error:
-            print(TECH_MESSAGES['score_update_error'].format(error=error))
+            print(f"Ошибка базы данных при обновлении очков: {error}")
+            if self.connection:
+                self.connection.rollback()
+            return False
+        except Exception as error:
+            print(f"Неожиданная ошибка при обновлении очков: {error}")
+            return False
 
     def update_reputation(self, user_id, rep_points=1):
         """Обновление репутации пользователя"""
         try:
+            # Валидация входных данных
+            if not isinstance(user_id, int) or user_id <= 0:
+                print(f"Ошибка валидации: некорректный user_id = {user_id}")
+                return False
+
+            if not isinstance(rep_points, (int, float)):
+                print(f"Ошибка валидации: некорректное количество репутации = {rep_points}")
+                return False
+
+            # Проверка соединения с базой данных
+            if not self.connection:
+                print("Ошибка: соединение с базой данных не установлено")
+                return False
+
             cursor = self.connection.cursor()
             cursor.execute("""
                 UPDATE users SET reputation = reputation + ? WHERE user_id = ?
             """, (rep_points, user_id))
+
+            if cursor.rowcount == 0:
+                print(f"Предупреждение: пользователь с ID {user_id} не найден для обновления репутации")
+                return False
+
             self.connection.commit()
-            # Обновление ранга на основе репутации
+            # Обновление ранга на основе репутации (теперь вызывается только здесь)
             self.update_rank(user_id)
+            return True
         except sqlite3.Error as error:
-            print(TECH_MESSAGES['reputation_update_error'].format(error=error))
+            print(f"Ошибка базы данных при обновлении репутации: {error}")
+            if self.connection:
+                self.connection.rollback()
+            return False
+        except Exception as error:
+            print(f"Неожиданная ошибка при обновлении репутации: {error}")
+            return False
 
     def update_rank(self, user_id, chat_id=None, first_name=None):
         """Обновление ранга пользователя на основе репутации"""
@@ -236,34 +290,53 @@ class Database:
     def get_user_info(self, user_id):
         """Получение информации о пользователе"""
         try:
+            # Валидация входных данных
+            if not isinstance(user_id, int) or user_id <= 0:
+                print(f"Ошибка валидации: некорректный user_id = {user_id}")
+                return None
+
+            # Проверка соединения с базой данных
+            if not self.connection:
+                print("Ошибка: соединение с базой данных не установлено")
+                return None
+
             cursor = self.connection.cursor()
             cursor.execute("""
                 SELECT user_id, first_name, username, reputation, rank, message_count, active_days, days_since_join, last_message, joined_at, left_at, language, actions, score, warnings, role
                 FROM users WHERE user_id = ?
             """, (user_id,))
             result = cursor.fetchone()
+
             if result:
-                return {
-                    'ID': result[0],
-                    'Имя': result[1],
-                    'Имя пользователя': result[2] or 'не указано',
-                    'Репутация': result[3],
-                    'Ранг': result[4],
-                    'Количество сообщений': result[5],
-                    'Активные дни': result[6],
-                    'Дней с присоединения': result[7],
-                    'Последнее сообщение': result[8],
-                    'Присоединился': result[9],
-                    'Покинул': result[10],
-                    'Язык': result[11],
-                    'Действия': result[12],
-                    'Очки': result[13],
-                    'Предупреждений': result[14],
-                    'Роль': result[15]
-                }
+                try:
+                    return {
+                        'ID': result[0],
+                        'Имя': result[1] or 'Неизвестно',
+                        'Имя пользователя': result[2] or 'не указано',
+                        'Репутация': result[3] or 0,
+                        'Ранг': result[4] or 'Рядовой',
+                        'Количество сообщений': result[5] or 0,
+                        'Активные дни': result[6] or 0,
+                        'Дней с присоединения': result[7] or 0,
+                        'Последнее сообщение': result[8],
+                        'Присоединился': result[9],
+                        'Покинул': result[10],
+                        'Язык': result[11] or 'ru',
+                        'Действия': result[12] or '[]',
+                        'Очки': result[13] or 0,
+                        'Предупреждений': result[14] or 0,
+                        'Роль': result[15] or 'user'
+                    }
+                except (IndexError, TypeError) as e:
+                    print(f"Ошибка обработки данных пользователя {user_id}: {e}")
+                    return None
+
             return None
         except sqlite3.Error as error:
-            print(TECH_MESSAGES['user_info_error'].format(error=error))
+            print(f"Ошибка базы данных при получении информации о пользователе {user_id}: {error}")
+            return None
+        except Exception as error:
+            print(f"Неожиданная ошибка при получении информации о пользователе {user_id}: {error}")
             return None
 
     def import_users_from_csv(self, csv_file_path):
@@ -301,16 +374,16 @@ class Database:
                             # Обновляем существующего пользователя
                             cursor.execute("""
                                 UPDATE users
-                                SET username = ?, first_name = ?, last_name = ?, score = ?, warnings = ?, reputation = ?
+                                SET username = ?, first_name = ?, last_name = ?, score = ?, warnings = ?, reputation = ?, rank = ?
                                 WHERE user_id = ?
-                            """, (username, first_name, last_name, xp, rep, rep, user_id))
+                            """, (username, first_name, last_name, xp, rep, xp, db.calculate_rank(xp), user_id))
                             updated_count += 1
                         else:
                             # Добавляем нового пользователя
                             cursor.execute("""
-                                INSERT INTO users (user_id, username, first_name, last_name, score, warnings, reputation)
-                                VALUES (?, ?, ?, ?, ?, ?, ?)
-                            """, (user_id, username, first_name, last_name, xp, rep, rep))
+                                INSERT INTO users (user_id, username, first_name, last_name, score, warnings, reputation, rank)
+                                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                            """, (user_id, username, first_name, last_name, xp, rep, xp, db.calculate_rank(xp)))
                             imported_count += 1
 
                         self.connection.commit()
@@ -329,15 +402,49 @@ class Database:
     def add_scheduled_post(self, chat_id, text, schedule_time, created_by, image_path=None):
         """Добавление запланированного поста"""
         try:
+            # Валидация входных данных
+            if not isinstance(chat_id, int):
+                print(f"Ошибка валидации: некорректный chat_id = {chat_id}")
+                return None
+
+            if not text or not text.strip():
+                print("Ошибка валидации: текст поста пустой")
+                return None
+
+            if not isinstance(created_by, int) or created_by <= 0:
+                print(f"Ошибка валидации: некорректный created_by = {created_by}")
+                return None
+
+            # Ограничение длины текста
+            if len(text) > 4000:
+                print("Ошибка валидации: текст поста слишком длинный")
+                return None
+
+            # Валидация пути к изображению
+            if image_path and not isinstance(image_path, str):
+                print(f"Ошибка валидации: некорректный путь к изображению = {image_path}")
+                return None
+
+            # Проверка соединения с базой данных
+            if not self.connection:
+                print("Ошибка: соединение с базой данных не установлено")
+                return None
+
             cursor = self.connection.cursor()
             cursor.execute("""
                 INSERT INTO scheduled_posts (chat_id, text, image_path, schedule_time, created_by)
                 VALUES (?, ?, ?, ?, ?)
             """, (chat_id, text, image_path, schedule_time, created_by))
+
             self.connection.commit()
             return cursor.lastrowid
         except sqlite3.Error as error:
-            print(f"Ошибка при добавлении поста: {error}")
+            print(f"Ошибка базы данных при добавлении поста: {error}")
+            if self.connection:
+                self.connection.rollback()
+            return None
+        except Exception as error:
+            print(f"Неожиданная ошибка при добавлении поста: {error}")
             return None
 
     def get_scheduled_posts(self, chat_id=None, limit=50):
@@ -451,7 +558,32 @@ class Database:
     def add_donation(self, user_id, amount, currency='RUB'):
         """Добавить донат пользователя"""
         try:
+            # Валидация входных данных
+            if not isinstance(user_id, int) or user_id <= 0:
+                print(f"Ошибка валидации: некорректный user_id = {user_id}")
+                return False
+
+            if not isinstance(amount, (int, float)) or amount <= 0:
+                print(f"Ошибка валидации: некорректная сумма доната = {amount}")
+                return False
+
+            if not isinstance(currency, str) or not currency.strip():
+                print(f"Ошибка валидации: некорректная валюта = {currency}")
+                return False
+
+            # Ограничение максимальной суммы доната для предотвращения злоупотреблений
+            if amount > 1000000:  # 1 миллион рублей максимум
+                print(f"Ошибка валидации: сумма доната слишком большая = {amount}")
+                return False
+
+            # Проверка соединения с базой данных
+            if not self.connection:
+                print("Ошибка: соединение с базой данных не установлено")
+                return False
+
             cursor = self.connection.cursor()
+
+            # Вставляем запись о донате
             cursor.execute("""
                 INSERT INTO donations (user_id, amount, currency)
                 VALUES (?, ?, ?)
@@ -460,12 +592,27 @@ class Database:
             # Начисляем очки за донат (1 очко за каждые 100 рублей)
             points = int(amount // 100)
             if points > 0:
-                self.update_score(user_id, points)
+                # Обновляем score и reputation одновременно, и вызываем update_rank только один раз
+                cursor.execute("""
+                    UPDATE users SET score = score + ?, reputation = reputation + ?, last_message = CURRENT_TIMESTAMP WHERE user_id = ?
+                """, (points, points, user_id))
+
+                if cursor.rowcount == 0:
+                    print(f"Предупреждение: пользователь с ID {user_id} не найден при начислении очков за донат")
+                    self.connection.rollback()
+                    return False
+
+                self.update_rank(user_id)
 
             self.connection.commit()
             return True
         except sqlite3.Error as error:
-            print(f"Ошибка при добавлении доната: {error}")
+            print(f"Ошибка базы данных при добавлении доната: {error}")
+            if self.connection:
+                self.connection.rollback()
+            return False
+        except Exception as error:
+            print(f"Неожиданная ошибка при добавлении доната: {error}")
             return False
 
     def get_total_donations(self, user_id, year=None):
