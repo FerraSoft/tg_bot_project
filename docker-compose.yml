@@ -1,0 +1,41 @@
+version: '3.8'
+
+services:
+  telegram-bot:
+    build: .
+    container_name: telegram-bot
+    restart: unless-stopped
+    environment:
+      - BOT_TOKEN=${BOT_TOKEN}
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - DEVELOPER_CHAT_ID=${DEVELOPER_CHAT_ID}
+      - ENABLE_DEVELOPER_NOTIFICATIONS=${ENABLE_DEVELOPER_NOTIFICATIONS:-True}
+      - ENABLE_AI_ERROR_PROCESSING=${ENABLE_AI_ERROR_PROCESSING:-True}
+    volumes:
+      - bot_data:/app/data
+      - ./config_local.py:/app/config_local.py:ro
+    networks:
+      - bot-network
+
+  scheduler:
+    build: .
+    container_name: telegram-bot-scheduler
+    restart: unless-stopped
+    command: python scheduler.py
+    environment:
+      - BOT_TOKEN=${BOT_TOKEN}
+    volumes:
+      - bot_data:/app/data
+      - ./config_local.py:/app/config_local.py:ro
+    networks:
+      - bot-network
+    depends_on:
+      - telegram-bot
+
+volumes:
+  bot_data:
+    driver: local
+
+networks:
+  bot-network:
+    driver: bridge

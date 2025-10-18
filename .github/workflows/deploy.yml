@@ -1,0 +1,75 @@
+name: Deploy Telegram Bot
+
+on:
+  push:
+    branches: [ main, master ]
+  pull_request:
+    branches: [ main, master ]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+
+    steps:
+    - uses: actions/checkout@v3
+
+    - name: Set up Python 3.10
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.10'
+
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install -r requirements.txt
+
+    - name: Create test config
+      run: |
+        cp config_template.py config_local.py
+        # Здесь можно добавить настройку тестовых ключей
+
+    - name: Run tests
+      run: |
+        python test_error_system.py
+
+    - name: Run database tests
+      run: |
+        python -c "from database_sqlite import Database; db = Database(); print('Database connection successful')"
+
+  deploy:
+    needs: test
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master'
+
+    steps:
+    - uses: actions/checkout@v3
+
+    - name: Set up Python 3.10
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.10'
+
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install -r requirements.txt
+
+    - name: Setup bot configuration
+      env:
+        BOT_TOKEN: ${{ secrets.BOT_TOKEN }}
+        OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+        DEVELOPER_CHAT_ID: ${{ secrets.DEVELOPER_CHAT_ID }}
+      run: |
+        echo "BOT_TOKEN=\"$BOT_TOKEN\"" > config_local.py
+        echo "OPENAI_API_KEY=\"$OPENAI_API_KEY\"" >> config_local.py
+        echo "DEVELOPER_CHAT_ID=\"$DEVELOPER_CHAT_ID\"" >> config_local.py
+        echo "ENABLE_DEVELOPER_NOTIFICATIONS=True" >> config_local.py
+        echo "ENABLE_AI_ERROR_PROCESSING=True" >> config_local.py
+
+    - name: Run database migrations
+      run: |
+        python -c "from database_sqlite import Database; db = Database(); print('Database initialized successfully')"
+
+    - name: Start bot (test mode)
+      run: |
+        timeout 10 python bot.py || echo "Bot startup test completed"

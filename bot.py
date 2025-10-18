@@ -9,7 +9,7 @@ from datetime import datetime, timedelta
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, InlineQueryResultArticle, InputTextMessageContent
 from telegram.ext import ApplicationBuilder, ContextTypes, CommandHandler, MessageHandler, filters, InlineQueryHandler, ChatMemberHandler
 from database_sqlite import Database
-from config_local import BOT_TOKEN, OPENWEATHER_API_KEY, NEWS_API_KEY, ADMIN_IDS
+from config_local import BOT_TOKEN, OPENWEATHER_API_KEY, NEWS_API_KEY, ADMIN_IDS, DEVELOPER_CHAT_ID, ENABLE_DEVELOPER_NOTIFICATIONS, OPENAI_API_KEY, ENABLE_AI_ERROR_PROCESSING, AI_MODEL
 from messages import *
 
 try:
@@ -79,10 +79,18 @@ class TelegramBot:
         self.application.add_handler(CommandHandler("list_posts", self.list_posts))
         self.application.add_handler(CommandHandler("delete_post", self.delete_post))
         self.application.add_handler(CommandHandler("publish_now", self.publish_now))
+        self.application.add_handler(CommandHandler("report_error", self.report_error))
+        self.application.add_handler(CommandHandler("admin_errors", self.admin_errors))
+        self.application.add_handler(CommandHandler("analyze_error_ai", self.analyze_error_with_ai))
+        self.application.add_handler(CommandHandler("process_all_errors_ai", self.process_all_new_errors_ai))
+        self.application.add_handler(CommandHandler("add_error_to_todo", self.add_error_to_todo))
+        self.application.add_handler(CommandHandler("add_all_analyzed_to_todo", self.add_all_analyzed_errors_to_todo))
 
         # Обработчики сообщений
         self.application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, self.handle_message))
         self.application.add_handler(MessageHandler(filters.VOICE, self.handle_voice_message))
+        self.application.add_handler(MessageHandler(filters.AUDIO, self.handle_audio_message))
+        self.application.add_handler(MessageHandler(filters.VIDEO, self.handle_video_message))
         self.application.add_handler(ChatMemberHandler(self.handle_new_chat_members, ChatMemberHandler.CHAT_MEMBER))
 
         # Инлайновые запросы
@@ -564,6 +572,8 @@ ID: {user_info['ID']}
             await self.cancel_schedule_post(query, context)
         elif query.data.startswith('donate_'):
             await self.handle_donation_callback(query, context)
+        elif query.data.startswith('moderate_'):
+            await self.handle_moderation_callback(query, context)
 
 
     async def start_rps_game(self, query, context):
@@ -1663,6 +1673,9 @@ ID: {user_info['ID']}
             db.update_score(user.id, bonus_points)
             await update.message.reply_text(USER_MESSAGES['bonus_points'].format(points=bonus_points))
 
+        # Проверка на "+" в сообщении для реакции рукопожатием
+        await self.handle_plus_reaction(update.message)
+
     async def handle_text_edit(self, update, context):
         """Обработка редактирования текста поста"""
         new_text = update.message.text
@@ -2325,6 +2338,205 @@ ID: {user_info['ID']}
             except:
                 pass
 
+    async def handle_audio_message(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Обработка аудио сообщений для модерации"""
+        await self.handle_media_for_moderation(update, context, "audio")
+
+    async def handle_video_message(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Обработка видео сообщений для модерации"""
+        await self.handle_media_for_moderation(update, context, "video")
+
+    async def handle_media_for_moderation(self, update: Update, context: ContextTypes.DEFAULT_TYPE, media_type: str):
+        """Обработка медиафайлов для модерации"""
+        user = update.effective_user
+        message = update.message
+
+        # Добавление пользователя в базу данных
+        db.add_user(user.id, user.username, user.first_name, user.last_name)
+
+        # Получаем информацию о медиа
+        if media_type == "audio":
+            media = message.audio
+            duration = getattr(media, 'duration', 0)
+            file_size = getattr(media, 'file_size', 0)
+            title = getattr(media, 'title', 'Без названия')
+            performer = getattr(media, 'performer', 'Неизвестный исполнитель')
+        elif media_type == "video":
+            media = message.video
+            duration = getattr(media, 'duration', 0)
+            file_size = getattr(media, 'file_size', 0)
+            width = getattr(media, 'width', 0)
+            height = getattr(media, 'height', 0)
+        else:
+            return
+
+        # Попытка транскрибации аудио/видео
+        transcription = ""
+        if media_type == "audio":
+            transcription = await self.transcribe_audio_for_moderation(media, update)
+
+        # Сохраняем информацию о медиа в контексте для модерации
+        context.user_data['media_for_moderation'] = {
+            'message_id': message.message_id,
+            'chat_id': message.chat.id,
+            'user_id': user.id,
+            'media_type': media_type,
+            'file_id': media.file_id,
+            'duration': duration,
+            'file_size': file_size,
+            'transcription': transcription,
+            'caption': message.caption or "",
+            'timestamp': datetime.now()
+        }
+
+        # Удаляем оригинальное сообщение
+        try:
+            await message.delete()
+        except Exception as e:
+            print(f"Не удалось удалить сообщение с медиа: {e}")
+
+        # Создаем пост для планировщика с отсрочкой 8 часов
+        scheduled_time = datetime.now() + timedelta(hours=8)
+
+        # Отправляем уведомление администраторам для модерации
+        await self.notify_admins_for_moderation(context, user, media_type, transcription, message.caption or "")
+
+        # Создаем клавиатуру для модерации
+        keyboard = [
+            [InlineKeyboardButton("✅ Одобрить и опубликовать сейчас", callback_data=f'moderate_approve_now_{user.id}')],
+            [InlineKeyboardButton("⏰ Одобрить с отсрочкой (8 часов)", callback_data=f'moderate_approve_delay_{user.id}')],
+            [InlineKeyboardButton("❌ Отклонить", callback_data=f'moderate_reject_{user.id}')]
+        ]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+
+        # Отправляем информацию в группу модераторов (если настроена)
+        await self.send_to_moderator_group(context, user, media_type, transcription, message.caption or "", reply_markup)
+
+    async def transcribe_audio_for_moderation(self, audio, update):
+        """Транскрибация аудио для модерации"""
+        if not SPEECH_RECOGNITION_AVAILABLE:
+            return "[Транскрибация недоступна - не установлена библиотека]"
+
+        try:
+            # Создаем временный файл для загрузки аудио
+            with tempfile.NamedTemporaryFile(suffix='.ogg', delete=False) as temp_ogg:
+                temp_ogg_path = temp_ogg.name
+
+            # Скачиваем аудио
+            audio_file = await audio.get_file()
+            await audio_file.download_to_drive(temp_ogg_path)
+
+            # Конвертируем OGG в WAV для speech_recognition
+            temp_wav_path = temp_ogg_path.replace('.ogg', '.wav')
+
+            if PYDUB_AVAILABLE:
+                # Используем pydub для конвертации
+                audio_seg = AudioSegment.from_ogg(temp_ogg_path)
+                audio_seg.export(temp_wav_path, format='wav')
+            else:
+                # Используем ffmpeg для конвертации (если доступен)
+                try:
+                    subprocess.run([
+                        'ffmpeg', '-i', temp_ogg_path, '-acodec', 'pcm_s16le',
+                        '-ar', '16000', '-ac', '1', temp_wav_path
+                    ], check=True, capture_output=True)
+                except (subprocess.CalledProcessError, FileNotFoundError):
+                    # Очищаем временные файлы и возвращаем ошибку
+                    os.unlink(temp_ogg_path)
+                    return "[Невозможно конвертировать аудио для транскрибации]"
+
+            # Распознавание речи
+            recognizer = sr.Recognizer()
+
+            with sr.AudioFile(temp_wav_path) as source:
+                audio_data = recognizer.record(source)
+
+                # Пробуем разные API для распознавания
+                try:
+                    # Сначала пробуем Google Speech Recognition (бесплатно)
+                    text = recognizer.recognize_google(audio_data, language='ru-RU')
+                    return text
+                except sr.UnknownValueError:
+                    return "[Не удалось распознать речь]"
+                except sr.RequestError:
+                    # Если Google API недоступен, пробуем Sphinx (локальный, но менее точный)
+                    try:
+                        text = recognizer.recognize_sphinx(audio_data, language='ru-RU')
+                        return text
+                    except sr.UnknownValueError:
+                        return "[Не удалось распознать речь (локально)]"
+                    except sr.RequestError:
+                        return "[Сервисы распознавания речи недоступны]"
+
+        except Exception as e:
+            print(f"Ошибка при транскрибации для модерации: {e}")
+            return "[Ошибка при обработке аудио]"
+
+        finally:
+            # Очищаем временные файлы
+            try:
+                if 'temp_ogg_path' in locals():
+                    os.unlink(temp_ogg_path)
+                if 'temp_wav_path' in locals():
+                    os.unlink(temp_wav_path)
+            except:
+                pass
+
+    async def notify_admins_for_moderation(self, context, user, media_type, transcription, caption):
+        """Отправка уведомления администраторам для модерации медиа"""
+        # Получаем список администраторов из базы данных или конфига
+        admin_ids = ADMIN_IDS.copy()
+
+        # Добавляем администраторов из чата
+        # Здесь можно добавить логику получения администраторов из чата
+
+        for admin_id in admin_ids:
+            try:
+                notification_text = (
+                    "🔔 <b>Требуется модерация медиафайла</b>\n\n"
+                    f"👤 Пользователь: {user.first_name} (@{user.username if user.username else 'нет'})\n"
+                    f"🆔 ID: {user.id}\n"
+                    f"📁 Тип файла: {media_type}\n"
+                    f"📝 Описание: {caption[:100]}{'...' if len(caption) > 100 else ''}\n"
+                    f"🎵 Транскрипция: {transcription[:200]}{'...' if len(transcription) > 200 else ''}\n\n"
+                    "Выберите действие в группе модераторов."
+                )
+
+                await context.bot.send_message(
+                    chat_id=admin_id,
+                    text=notification_text,
+                    parse_mode='HTML'
+                )
+            except Exception as e:
+                print(f"Не удалось отправить уведомление администратору {admin_id}: {e}")
+
+    async def send_to_moderator_group(self, context, user, media_type, transcription, caption, reply_markup):
+        """Отправка медиа в группу модераторов"""
+        # Здесь нужно указать ID группы модераторов
+        # Пока используем тот же чат для демонстрации
+        moderator_group_id = context.user_data['media_for_moderation']['chat_id']
+
+        try:
+            info_text = (
+                "🔍 <b>Медиафайл на модерации</b>\n\n"
+                f"👤 От пользователя: {user.first_name} (@{user.username if user.username else 'нет'})\n"
+                f"🆔 ID: {user.id}\n"
+                f"📁 Тип: {media_type.upper()}\n"
+                f"📝 Описание: {caption or 'Без описания'}\n"
+                f"🎵 Транскрипция: {transcription or 'Не удалось получить'}\n\n"
+                "Выберите действие:"
+            )
+
+            await context.bot.send_message(
+                chat_id=moderator_group_id,
+                text=info_text,
+                reply_markup=reply_markup,
+                parse_mode='HTML'
+            )
+
+        except Exception as e:
+            print(f"Не удалось отправить медиа в группу модераторов: {e}")
+
     # ===== ВСПОМОГАТЕЛЬНЫЕ МЕТОДЫ ДЛЯ ИГР =====
 
     def add_random_tile(self, board):
@@ -2607,6 +2819,721 @@ ID: {user_info['ID']}
 
         except ValueError:
             await query.edit_message_text("❌ Неверная сумма!")
+
+    async def handle_moderation_callback(self, query, context):
+        """Обработка callback-запросов модерации медиа"""
+        await query.answer()
+
+        try:
+            action, decision, user_id_str = query.data.split('_')
+            user_id = int(user_id_str)
+        except (ValueError, IndexError):
+            await query.edit_message_text("❌ Ошибка формата команды модерации")
+            return
+
+        # Получаем данные медиа из контекста или хранилища
+        media_data = context.user_data.get('media_for_moderation')
+
+        if not media_data:
+            await query.edit_message_text("❌ Данные медиа не найдены")
+            return
+
+        if media_data['user_id'] != user_id:
+            await query.edit_message_text("❌ Несоответствие пользователя")
+            return
+
+        # Определяем действие модератора
+        if decision == "approve" and action == "moderate":
+            # Одобрено - публикуем сейчас
+            await self.publish_media_now(query, context, media_data)
+        elif decision == "delay" and action == "moderate":
+            # Одобрено с отсрочкой - планируем на 8 часов
+            await self.schedule_media_for_later(query, context, media_data)
+        elif decision == "reject" and action == "moderate":
+            # Отклонено
+            await self.reject_media(query, context, media_data)
+        else:
+            await query.edit_message_text("❌ Неизвестное действие модерации")
+
+    async def publish_media_now(self, query, context, media_data):
+        """Публикация медиа немедленно"""
+        try:
+            chat_id = media_data['chat_id']
+
+            # Получаем информацию о пользователе
+            user_info = db.get_user_info(media_data['user_id'])
+            user_name = user_info['Имя'] if user_info else f"Пользователь {media_data['user_id']}"
+
+            # Формируем текст публикации
+            if media_data['media_type'] == 'audio':
+                text = f"🎵 Аудио от пользователя {user_name}\n\n{media_data['caption'] or 'Без описания'}"
+                if media_data['transcription']:
+                    text += f"\n\n🎵 Транскрипция: {media_data['transcription']}"
+            else:  # video
+                text = f"🎥 Видео от пользователя {user_name}\n\n{media_data['caption'] or 'Без описания'}"
+
+            # Здесь нужно реализовать отправку медиафайла
+            # Пока отправляем только текст
+            await context.bot.send_message(
+                chat_id=chat_id,
+                text=text,
+                parse_mode='HTML'
+            )
+
+            # Уведомляем модератора об успешной публикации
+            await query.edit_message_text(
+                f"✅ Медиа успешно опубликовано!\n\n"
+                f"👤 Пользователь: {user_name}\n"
+                f"📁 Тип: {media_data['media_type'].upper()}\n"
+                f"📝 Текст: {text[:100]}{'...' if len(text) > 100 else ''}"
+            )
+
+            # Очищаем данные медиа
+            context.user_data.pop('media_for_moderation', None)
+
+        except Exception as e:
+            await query.edit_message_text(f"❌ Ошибка при публикации медиа: {str(e)[:100]}")
+
+    async def schedule_media_for_later(self, query, context, media_data):
+        """Планирование медиа на публикацию через 8 часов"""
+        try:
+            # Время публикации через 8 часов
+            schedule_time = datetime.now() + timedelta(hours=8)
+
+            # Получаем информацию о пользователе
+            user_info = db.get_user_info(media_data['user_id'])
+            user_name = user_info['Имя'] if user_info else f"Пользователь {media_data['user_id']}"
+
+            # Формируем текст для планировщика
+            if media_data['media_type'] == 'audio':
+                text = f"🎵 Аудио от пользователя {user_name}\n\n{media_data['caption'] or 'Без описания'}"
+                if media_data['transcription']:
+                    text += f"\n\n🎵 Транскрипция: {media_data['transcription']}"
+            else:  # video
+                text = f"🎥 Видео от пользователя {user_name}\n\n{media_data['caption'] or 'Без описания'}"
+
+            # Добавляем в планировщик постов
+            post_id = db.add_scheduled_post(
+                chat_id=media_data['chat_id'],
+                text=text,
+                schedule_time=schedule_time.strftime('%Y-%m-%d %H:%M:%S'),
+                created_by=0  # Системная модерация
+            )
+
+            if post_id:
+                await query.edit_message_text(
+                    f"⏰ Медиа запланировано для публикации!\n\n"
+                    f"📅 Время публикации: {schedule_time.strftime('%Y-%m-%d %H:%M:%S')}\n"
+                    f"👤 Пользователь: {user_name}\n"
+                    f"📁 Тип: {media_data['media_type'].upper()}\n"
+                    f"🆔 Поста: {post_id}"
+                )
+            else:
+                await query.edit_message_text("❌ Ошибка при планировании медиа")
+
+            # Очищаем данные медиа
+            context.user_data.pop('media_for_moderation', None)
+
+        except Exception as e:
+            await query.edit_message_text(f"❌ Ошибка при планировании медиа: {str(e)[:100]}")
+
+    async def reject_media(self, query, context, media_data):
+        """Отклонение медиа"""
+        try:
+            # Получаем информацию о пользователе
+            user_info = db.get_user_info(media_data['user_id'])
+            user_name = user_info['Имя'] if user_info else f"Пользователь {media_data['user_id']}"
+
+            # Отправляем уведомление пользователю об отклонении
+            try:
+                await context.bot.send_message(
+                    chat_id=media_data['user_id'],
+                    text="❌ Ваш медиафайл был отклонен модераторами и не будет опубликован."
+                )
+            except Exception as e:
+                print(f"Не удалось отправить уведомление пользователю {media_data['user_id']}: {e}")
+
+            # Уведомляем модератора об отклонении
+            await query.edit_message_text(
+                f"❌ Медиа отклонено!\n\n"
+                f"👤 Пользователь: {user_name}\n"
+                f"📁 Тип: {media_data['media_type'].upper()}\n"
+                f"📝 Причина: Отклонено модератором"
+            )
+
+            # Очищаем данные медиа
+            context.user_data.pop('media_for_moderation', None)
+
+        except Exception as e:
+            await query.edit_message_text(f"❌ Ошибка при отклонении медиа: {str(e)[:100]}")
+
+    async def report_error(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Команда для отправки отчета об ошибке (только для администраторов)"""
+        user = update.effective_user
+
+        # Проверка прав администратора
+        if not await self.is_admin(update.effective_chat, user.id):
+            await update.message.reply_text("❌ Эта команда доступна только администраторам.")
+            return
+
+        # Проверка корректности аргументов команды
+        if len(context.args) < 2:
+            await update.message.reply_text(
+                "❌ Использование: /report_error <тип> <заголовок> [описание]\n\n"
+                "Типы ошибок:\n"
+                "• bug - ошибка в работе бота\n"
+                "• feature - предложение новой функции\n"
+                "• crash - критическая ошибка/падение\n"
+                "• ui - проблема интерфейса\n"
+                "• security - проблема безопасности\n\n"
+                "Пример: /report_error bug Не работает команда /weather Описание проблемы..."
+            )
+            return
+
+        error_type = context.args[0].lower()
+        title = context.args[1]
+        description = ' '.join(context.args[2:]) if len(context.args) > 2 else ""
+
+        # Валидация типа ошибки
+        valid_types = ['bug', 'feature', 'crash', 'ui', 'security', 'improvement', 'other']
+        if error_type not in valid_types:
+            await update.message.reply_text(
+                f"❌ Неверный тип ошибки: {error_type}\n"
+                f"Доступные типы: {', '.join(valid_types)}"
+            )
+            return
+
+        # Валидация заголовка
+        if len(title.strip()) == 0:
+            await update.message.reply_text("❌ Заголовок ошибки не может быть пустым")
+            return
+
+        if len(title) > 200:
+            await update.message.reply_text("❌ Заголовок слишком длинный (максимум 200 символов)")
+            return
+
+        # Валидация описания
+        if len(description) > 2000:
+            await update.message.reply_text("❌ Описание слишком длинное (максимум 2000 символов)")
+            return
+
+        # Определение приоритета по умолчанию
+        priority_map = {
+            'crash': 'critical',
+            'security': 'high',
+            'bug': 'medium',
+            'ui': 'medium',
+            'feature': 'low',
+            'improvement': 'low',
+            'other': 'medium'
+        }
+        priority = priority_map.get(error_type, 'medium')
+
+        # Сохранение ошибки в базу данных
+        error_id = db.add_error(
+            admin_id=user.id,
+            error_type=error_type,
+            title=title,
+            description=description if description else "Описание не предоставлено",
+            priority=priority
+        )
+
+        if error_id:
+            # Отправляем подтверждение администратору
+            await update.message.reply_text(
+                "✅ Отчет об ошибке успешно отправлен!\n\n"
+                f"🆔 ID ошибки: {error_id}\n"
+                f"📋 Тип: {error_type}\n"
+                f"📝 Заголовок: {title}\n"
+                f"⭐ Приоритет: {priority}\n\n"
+                "Спасибо за ваш вклад в улучшение бота!"
+            )
+
+            # Отправляем уведомление разработчику
+            await self.send_developer_notification(
+                context,
+                f"🚨 <b>Новый отчет об ошибке!</b>\n\n"
+                f"👤 От: {admin_name}\n"
+                f"🆔 ID ошибки: {error_id}\n"
+                f"📋 Тип: {error_type}\n"
+                f"📝 Заголовок: {title}\n"
+                f"⭐ Приоритет: {priority}\n"
+                f"📅 Время: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n\n"
+                f"📄 Описание: {description if description else 'Описание не предоставлено'}"
+            )
+
+        else:
+            await update.message.reply_text("❌ Ошибка при сохранении отчета. Попробуйте позже.")
+
+    async def admin_errors(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Команда для просмотра списка ошибок (только для администраторов)"""
+        user = update.effective_user
+
+        # Проверка прав администратора
+        if not await self.is_admin(update.effective_chat, user.id):
+            await update.message.reply_text("❌ Эта команда доступна только администраторам.")
+            return
+
+        # Получаем параметр фильтрации (по статусу)
+        status_filter = None
+        if context.args and len(context.args) > 0:
+            status_filter = context.args[0].lower()
+            valid_statuses = ['new', 'in_progress', 'resolved', 'rejected']
+            if status_filter not in valid_statuses:
+                await update.message.reply_text(
+                    f"❌ Неверный статус: {status_filter}\n"
+                    f"Доступные статусы: {', '.join(valid_statuses)}"
+                )
+                return
+
+        # Получаем ошибки из базы данных
+        errors = db.get_errors(status=status_filter, limit=20)
+
+        if not errors:
+            status_text = f" со статусом '{status_filter}'" if status_filter else ""
+            await update.message.reply_text(f"📭 Нет ошибок{status_text}")
+            return
+
+        # Формируем ответ с информацией об ошибках
+        response = "📋 <b>Список ошибок и отчетов</b>\n\n"
+
+        for error in errors:
+            error_id, admin_id, error_type, title, description, status, priority, created_at, updated_at, ai_analysis, todo_added, resolved_at, admin_name, admin_username = error
+
+            # Определяем эмодзи для типа ошибки
+            type_emojis = {
+                'bug': '🐛',
+                'feature': '✨',
+                'crash': '💥',
+                'ui': '🎨',
+                'security': '🔒',
+                'improvement': '📈',
+                'other': '📝'
+            }
+            type_emoji = type_emojis.get(error_type, '📝')
+
+            # Определяем эмодзи для приоритета
+            priority_emojis = {
+                'critical': '🔴',
+                'high': '🟠',
+                'medium': '🟡',
+                'low': '🔵'
+            }
+            priority_emoji = priority_emojis.get(priority, '🟡')
+
+            # Определяем эмодзи для статуса
+            status_emojis = {
+                'new': '🆕',
+                'in_progress': '🔄',
+                'resolved': '✅',
+                'rejected': '❌'
+            }
+            status_emoji = status_emojis.get(status, '❓')
+
+            admin_display = admin_username if admin_username else admin_name if admin_name else f"ID:{admin_id}"
+
+            response += (
+                f"{type_emoji} <b>#{error_id}</b> {priority_emoji} {status_emoji}\n"
+                f"📝 <b>{title}</b>\n"
+                f"👤 {admin_display} | 📅 {created_at[:10]}\n"
+                f"📋 Тип: {error_type} | Статус: {status}\n"
+            )
+
+            if description and len(description) > 100:
+                response += f"📄 Описание: {description[:100]}...\n"
+            elif description:
+                response += f"📄 Описание: {description}\n"
+
+            response += "\n" + "─" * 40 + "\n"
+
+        # Проверяем, не превышает ли длина лимит Telegram (4096 символов)
+        if len(response) > 4000:
+            response = response[:3997] + "..."
+
+        await update.message.reply_text(response, parse_mode='HTML')
+
+    async def handle_plus_reaction(self, message):
+        """Обработка реакции на сообщения с '+'"""
+        try:
+            # Проверяем, содержит ли сообщение символ '+'
+            if message.text and '+' in message.text:
+                # Ставим реакцию рукопожатия
+                await message.set_reaction("🤝")
+                print(f"Reaction set for message from {message.from_user.first_name}")
+        except Exception as e:
+            # Игнорируем ошибки реакции (может быть вызвано ограничениями Telegram)
+            print(f"Could not set reaction: {e}")
+
+    async def send_developer_notification(self, context, message):
+        """Отправка уведомления разработчику об ошибке"""
+        if not ENABLE_DEVELOPER_NOTIFICATIONS or not DEVELOPER_CHAT_ID:
+            print("Уведомления разработчика отключены или не настроен DEVELOPER_CHAT_ID")
+            return False
+
+        try:
+            await context.bot.send_message(
+                chat_id=DEVELOPER_CHAT_ID,
+                text=message,
+                parse_mode='HTML',
+                disable_web_page_preview=True
+            )
+            print(f"Уведомление разработчику отправлено успешно")
+            return True
+        except Exception as e:
+            print(f"Ошибка при отправке уведомления разработчику: {e}")
+            return False
+
+    async def notify_error_status_change(self, context, error_id, old_status, new_status, admin_name, error_title):
+        """Отправка уведомления об изменении статуса ошибки"""
+        if not ENABLE_DEVELOPER_NOTIFICATIONS or not DEVELOPER_CHAT_ID:
+            return False
+
+        status_emojis = {
+            'new': '🆕',
+            'in_progress': '🔄',
+            'resolved': '✅',
+            'rejected': '❌'
+        }
+
+        old_emoji = status_emojis.get(old_status, '❓')
+        new_emoji = status_emojis.get(new_status, '❓')
+
+        notification_text = (
+            "🔄 <b>Статус ошибки изменен!</b>\n\n"
+            f"🆔 ID ошибки: {error_id}\n"
+            f"📝 Заголовок: {error_title}\n"
+            f"👤 Изменил: {admin_name}\n"
+            f"📊 Статус: {old_emoji} {old_status} → {new_emoji} {new_status}\n"
+            f"📅 Время: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
+        )
+
+        return await self.send_developer_notification(context, notification_text)
+
+    async def process_error_with_ai(self, error_id, error_type, title, description):
+        """Обработка ошибки с помощью ИИ"""
+        if not ENABLE_AI_ERROR_PROCESSING or not OPENAI_API_KEY:
+            print("Обработка ошибок ИИ отключена или не настроен OPENAI_API_KEY")
+            return None
+
+        try:
+            import openai
+
+            # Настройка OpenAI клиента
+            client = openai.OpenAI(api_key=OPENAI_API_KEY)
+
+            # Создаем промпт для анализа ошибки
+            prompt = f"""
+            Проанализируйте следующую ошибку бота и предоставьте структурированный анализ:
+
+            Тип ошибки: {error_type}
+            Заголовок: {title}
+            Описание: {description}
+
+            Пожалуйста, предоставьте анализ в следующем формате:
+            1. КЛАССИФИКАЦИЯ: Определите категорию проблемы (критическая, высокая, средняя, низкая)
+            2. ПРИЧИНА: Возможная причина возникновения проблемы
+            3. РЕШЕНИЕ: Рекомендуемое решение или шаги для исправления
+            4. ПРОФИЛАКТИКА: Как предотвратить подобные проблемы в будущем
+            5. ТЭГИ: Ключевые слова для категоризации (через запятую)
+
+            Ответ должен быть кратким и практически полезным для разработчика.
+            """
+
+            # Вызов OpenAI API
+            response = client.chat.completions.create(
+                model=AI_MODEL,
+                messages=[
+                    {"role": "system", "content": "Вы - опытный разработчик, анализирующий ошибки телеграм-бота. Предоставьте четкий и практичный анализ."},
+                    {"role": "user", "content": prompt}
+                ],
+                max_tokens=1000,
+                temperature=0.7
+            )
+
+            ai_analysis = response.choices[0].message.content.strip()
+
+            # Сохраняем анализ в базу данных
+            if db.update_error_ai_analysis(error_id, ai_analysis):
+                print(f"Анализ ИИ для ошибки #{error_id} сохранен успешно")
+                return ai_analysis
+            else:
+                print(f"Ошибка при сохранении анализа ИИ для ошибки #{error_id}")
+                return None
+
+        except ImportError:
+            print("OpenAI библиотека не установлена. Установите: pip install openai")
+            return None
+        except Exception as e:
+            print(f"Ошибка при обработке ошибки ИИ: {e}")
+            return None
+
+    async def analyze_error_with_ai(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Команда для анализа конкретной ошибки с помощью ИИ (только для администраторов)"""
+        user = update.effective_user
+
+        # Проверка прав администратора
+        if not await self.is_admin(update.effective_chat, user.id):
+            await update.message.reply_text("❌ Эта команда доступна только администраторам.")
+            return
+
+        if len(context.args) < 1:
+            await update.message.reply_text(
+                "❌ Использование: /analyze_error_ai <ID_ошибки>\n\n"
+                "Пример: /analyze_error_ai 1"
+            )
+            return
+
+        try:
+            error_id = int(context.args[0])
+        except ValueError:
+            await update.message.reply_text("❌ ID ошибки должен быть числом")
+            return
+
+        # Получаем информацию об ошибке
+        error_data = db.get_error_by_id(error_id)
+        if not error_data:
+            await update.message.reply_text(f"❌ Ошибка с ID {error_id} не найдена")
+            return
+
+        error_id, admin_id, error_type, title, description, status, priority, created_at, updated_at, ai_analysis, todo_added, resolved_at, admin_name, admin_username = error_data
+
+        if ai_analysis:
+            await update.message.reply_text(
+                f"🤖 <b>Анализ ошибки #{error_id} (ИИ)</b>\n\n"
+                f"📋 Тип: {error_type}\n"
+                f"📝 Заголовок: {title}\n"
+                f"📄 Существующий анализ:\n{ai_analysis}",
+                parse_mode='HTML'
+            )
+            return
+
+        # Отправляем сообщение о начале анализа
+        await update.message.reply_text(
+            f"🤖 Начинаю анализ ошибки #{error_id} с помощью ИИ...\n"
+            f"📋 Тип: {error_type}\n"
+            f"📝 Заголовок: {title}"
+        )
+
+        # Запускаем анализ в фоне
+        ai_analysis = await self.process_error_with_ai(error_id, error_type, title, description)
+
+        if ai_analysis:
+            await update.message.reply_text(
+                f"✅ <b>Анализ завершен!</b>\n\n"
+                f"🤖 <b>Анализ ошибки #{error_id} (ИИ):</b>\n\n"
+                f"📋 Тип: {error_type}\n"
+                f"📝 Заголовок: {title}\n"
+                f"📄 Анализ:\n{ai_analysis}",
+                parse_mode='HTML'
+            )
+        else:
+            await update.message.reply_text(
+                "❌ Не удалось выполнить анализ ошибки. Проверьте настройки ИИ или повторите попытку позже."
+            )
+
+    async def process_all_new_errors_ai(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Команда для обработки всех новых ошибок с помощью ИИ (только для администраторов)"""
+        user = update.effective_user
+
+        # Проверка прав администратора
+        if not await self.is_admin(update.effective_chat, user.id):
+            await update.message.reply_text("❌ Эта команда доступна только администраторам.")
+            return
+
+        # Получаем все новые ошибки
+        new_errors = db.get_errors(status='new', limit=10)
+
+        if not new_errors:
+            await update.message.reply_text("📭 Нет новых ошибок для обработки ИИ")
+            return
+
+        await update.message.reply_text(f"🤖 Начинаю обработку {len(new_errors)} ошибок с помощью ИИ...")
+
+        processed_count = 0
+        failed_count = 0
+
+        for error in new_errors:
+            error_id, admin_id, error_type, title, description, status, priority, created_at, updated_at, ai_analysis, todo_added, resolved_at, admin_name, admin_username = error
+
+            if not ai_analysis:  # Обрабатываем только ошибки без анализа
+                ai_analysis = await self.process_error_with_ai(error_id, error_type, title, description)
+                if ai_analysis:
+                    processed_count += 1
+                else:
+                    failed_count += 1
+
+        # Отчет о результатах
+        result_text = f"✅ Обработка завершена!\n\n📊 Результаты:\n• Обработано: {processed_count}\n• Ошибок: {failed_count}"
+        await update.message.reply_text(result_text)
+
+    async def add_error_to_todo(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Команда для добавления конкретной ошибки в TODO список (только для администраторов)"""
+        user = update.effective_user
+
+        # Проверка прав администратора
+        if not await self.is_admin(update.effective_chat, user.id):
+            await update.message.reply_text("❌ Эта команда доступна только администраторам.")
+            return
+
+        if len(context.args) < 1:
+            await update.message.reply_text(
+                "❌ Использование: /add_error_to_todo <ID_ошибки> [приоритет]\n\n"
+                "Приоритет (опционально): high, medium, low\n"
+                "Пример: /add_error_to_todo 1 high"
+            )
+            return
+
+        try:
+            error_id = int(context.args[0])
+        except ValueError:
+            await update.message.reply_text("❌ ID ошибки должен быть числом")
+            return
+
+        priority = context.args[1].lower() if len(context.args) > 1 else 'medium'
+        valid_priorities = ['high', 'medium', 'low']
+        if priority not in valid_priorities:
+            await update.message.reply_text(f"❌ Неверный приоритет: {priority}. Доступные: {', '.join(valid_priorities)}")
+            return
+
+        # Получаем информацию об ошибке
+        error_data = db.get_error_by_id(error_id)
+        if not error_data:
+            await update.message.reply_text(f"❌ Ошибка с ID {error_id} не найдена")
+            return
+
+        error_id, admin_id, error_type, title, description, status, priority, created_at, updated_at, ai_analysis, todo_added, resolved_at, admin_name, admin_username = error_data
+
+        if todo_added:
+            await update.message.reply_text(f"⚠️ Ошибка #{error_id} уже была добавлена в TODO список")
+            return
+
+        # Добавляем ошибку в TODO список
+        success = self.add_error_to_todo_file(error_id, title, error_type, priority, ai_analysis)
+
+        if success:
+            # Отмечаем ошибку как добавленную в TODO
+            db.mark_error_todo_added(error_id)
+
+            await update.message.reply_text(
+                f"✅ Ошибка #{error_id} успешно добавлена в TODO список!\n\n"
+                f"📝 Заголовок: {title}\n"
+                f"📋 Тип: {error_type}\n"
+                f"⭐ Приоритет: {priority}"
+            )
+        else:
+            await update.message.reply_text("❌ Не удалось добавить ошибку в TODO список")
+
+    def add_error_to_todo_file(self, error_id, title, error_type, priority, ai_analysis=None):
+        """Добавление ошибки в TODO файл"""
+        try:
+            todo_file_path = 'TODO.md'
+
+            # Читаем текущий файл TODO
+            with open(todo_file_path, 'r', encoding='utf-8') as file:
+                content = file.read()
+
+            # Определяем раздел для добавления задачи
+            priority_sections = {
+                'high': '## 🚀 Приоритетные задачи (High Priority)',
+                'medium': '## 🎯 Средний приоритет (Medium Priority)',
+                'low': '## 🔮 Низкий приоритет (Low Priority)'
+            }
+
+            section_title = priority_sections.get(priority, priority_sections['medium'])
+            task_text = f"- [ ] #{error_id} {title} (Тип: {error_type})"
+
+            # Добавляем анализ ИИ, если он есть
+            if ai_analysis:
+                # Извлекаем ключевые слова из анализа ИИ для более подробного описания
+                lines = ai_analysis.split('\n')
+                for line in lines[:3]:  # Берем первые 3 строки анализа
+                    if line.strip() and not line.startswith(('1.', '2.', '3.', '4.', '5.')):
+                        task_text += f" - {line.strip()}"
+
+            # Находим место для вставки
+            lines = content.split('\n')
+            insert_index = -1
+
+            for i, line in enumerate(lines):
+                if line.startswith(section_title):
+                    # Находим следующий подраздел или задачи в этом разделе
+                    for j in range(i + 1, len(lines)):
+                        next_line = lines[j]
+                        if next_line.startswith('### ') and 'Система ошибок' in next_line:
+                            # Вставляем перед подразделом "Система ошибок"
+                            insert_index = j
+                            break
+                        elif next_line.startswith('## ') and next_line != lines[i]:
+                            # Вставляем перед следующим основным разделом
+                            insert_index = j
+                            break
+                    if insert_index == -1:
+                        # Если не нашли место, вставляем в конец раздела
+                        insert_index = len(lines)
+                    break
+
+            if insert_index == -1:
+                # Если не нашли подходящий раздел, добавляем в конец файла
+                insert_index = len(lines)
+
+            # Вставляем задачу
+            lines.insert(insert_index, task_text)
+
+            # Записываем обновленный файл
+            with open(todo_file_path, 'w', encoding='utf-8') as file:
+                file.write('\n'.join(lines))
+
+            print(f"Ошибка #{error_id} успешно добавлена в TODO список")
+            return True
+
+        except Exception as e:
+            print(f"Ошибка при добавлении ошибки в TODO файл: {e}")
+            return False
+
+    async def add_all_analyzed_errors_to_todo(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Команда для добавления всех проанализированных ошибок в TODO список (только для администраторов)"""
+        user = update.effective_user
+
+        # Проверка прав администратора
+        if not await self.is_admin(update.effective_chat, user.id):
+            await update.message.reply_text("❌ Эта команда доступна только администраторам.")
+            return
+
+        # Получаем все ошибки с анализом ИИ, но не добавленные в TODO
+        all_errors = db.get_errors(limit=50)
+
+        errors_to_add = []
+        for error in all_errors:
+            error_id, admin_id, error_type, title, description, status, priority, created_at, updated_at, ai_analysis, todo_added, resolved_at, admin_name, admin_username = error
+
+            if ai_analysis and not todo_added:
+                errors_to_add.append((error_id, title, error_type, priority, ai_analysis))
+
+        if not errors_to_add:
+            await update.message.reply_text("📭 Нет проанализированных ошибок для добавления в TODO список")
+            return
+
+        await update.message.reply_text(f"📝 Начинаю добавление {len(errors_to_add)} ошибок в TODO список...")
+
+        added_count = 0
+        failed_count = 0
+
+        for error_id, title, error_type, priority, ai_analysis in errors_to_add:
+            success = self.add_error_to_todo_file(error_id, title, error_type, priority, ai_analysis)
+            if success:
+                db.mark_error_todo_added(error_id)
+                added_count += 1
+            else:
+                failed_count += 1
+
+        # Отчет о результатах
+        result_text = (
+            f"✅ Процесс завершен!\n\n"
+            f"📊 Результаты:\n"
+            f"• Добавлено в TODO: {added_count}\n"
+            f"• Ошибок: {failed_count}"
+        )
+        await update.message.reply_text(result_text)
 
     def run(self):
         """Запуск бота"""

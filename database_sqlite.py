@@ -110,6 +110,25 @@ class Database:
                 )
             """)
 
+            # Таблица ошибок и отчетов
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS errors (
+                    error_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    admin_id INTEGER,
+                    error_type TEXT NOT NULL,
+                    title TEXT NOT NULL,
+                    description TEXT NOT NULL,
+                    status TEXT DEFAULT 'new',
+                    priority TEXT DEFAULT 'medium',
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    ai_analysis TEXT,
+                    todo_added BOOLEAN DEFAULT 0,
+                    resolved_at TIMESTAMP,
+                    FOREIGN KEY (admin_id) REFERENCES users (user_id)
+                )
+            """)
+
             self.connection.commit()
             print(TECH_MESSAGES['db_tables_created'])
         except sqlite3.Error as error:
@@ -206,15 +225,15 @@ class Database:
             return False
 
     def update_rank(self, user_id, chat_id=None, first_name=None):
-        """Обновление ранга пользователя на основе репутации"""
+        """Обновление ранга пользователя на основе очков (score)"""
         try:
             cursor = self.connection.cursor()
-            cursor.execute("SELECT reputation, rank FROM users WHERE user_id = ?", (user_id,))
+            cursor.execute("SELECT score, rank FROM users WHERE user_id = ?", (user_id,))
             result = cursor.fetchone()
             if result:
-                reputation = result[0]
+                score = result[0]
                 old_rank = result[1]
-                new_rank = self.calculate_rank(reputation)
+                new_rank = self.calculate_rank(score)
 
                 if new_rank != old_rank:
                     cursor.execute("""
@@ -692,6 +711,230 @@ class Database:
                     achievements_unlocked.append('sponsor_year')
 
         return achievements_unlocked
+
+    def add_error(self, admin_id, error_type, title, description, priority='medium'):
+        """Добавление новой ошибки в систему"""
+        try:
+            # Валидация входных данных
+            if not isinstance(admin_id, int) or admin_id <= 0:
+                print(f"Ошибка валидации: некорректный admin_id = {admin_id}")
+                return None
+
+            if not error_type or not isinstance(error_type, str):
+                print(f"Ошибка валидации: некорректный тип ошибки = {error_type}")
+                return None
+
+            if not title or not isinstance(title, str) or len(title.strip()) == 0:
+                print("Ошибка валидации: заголовок ошибки пустой")
+                return None
+
+            if not description or not isinstance(description, str) or len(description.strip()) == 0:
+                print("Ошибка валидации: описание ошибки пустое")
+                return None
+
+            valid_priorities = ['low', 'medium', 'high', 'critical']
+            if priority not in valid_priorities:
+                print(f"Ошибка валидации: некорректный приоритет = {priority}")
+                return None
+
+            # Проверка соединения с базой данных
+            if not self.connection:
+                print("Ошибка: соединение с базой данных не установлено")
+                return None
+
+            cursor = self.connection.cursor()
+            current_time = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+
+            cursor.execute("""
+                INSERT INTO errors (admin_id, error_type, title, description, priority, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+            """, (admin_id, error_type, title.strip(), description.strip(), priority, current_time, current_time))
+
+            self.connection.commit()
+            return cursor.lastrowid
+        except sqlite3.Error as error:
+            print(f"Ошибка базы данных при добавлении ошибки: {error}")
+            if self.connection:
+                self.connection.rollback()
+            return None
+        except Exception as error:
+            print(f"Неожиданная ошибка при добавлении ошибки: {error}")
+            return None
+
+    def get_errors(self, status=None, limit=50):
+        """Получение списка ошибок с фильтрацией по статусу"""
+        try:
+            cursor = self.connection.cursor()
+            if status:
+                cursor.execute("""
+                    SELECT e.error_id, e.admin_id, e.error_type, e.title, e.description,
+                           e.status, e.priority, e.created_at, e.updated_at, e.ai_analysis,
+                           e.todo_added, e.resolved_at, u.first_name, u.username
+                    FROM errors e
+                    LEFT JOIN users u ON e.admin_id = u.user_id
+                    WHERE e.status = ?
+                    ORDER BY
+                        CASE e.priority
+                            WHEN 'critical' THEN 1
+                            WHEN 'high' THEN 2
+                            WHEN 'medium' THEN 3
+                            WHEN 'low' THEN 4
+                        END,
+                        e.created_at DESC
+                    LIMIT ?
+                """, (status, limit))
+            else:
+                cursor.execute("""
+                    SELECT e.error_id, e.admin_id, e.error_type, e.title, e.description,
+                           e.status, e.priority, e.created_at, e.updated_at, e.ai_analysis,
+                           e.todo_added, e.resolved_at, u.first_name, u.username
+                    FROM errors e
+                    LEFT JOIN users u ON e.admin_id = u.user_id
+                    ORDER BY
+                        CASE e.priority
+                            WHEN 'critical' THEN 1
+                            WHEN 'high' THEN 2
+                            WHEN 'medium' THEN 3
+                            WHEN 'low' THEN 4
+                        END,
+                        e.created_at DESC
+                    LIMIT ?
+                """, (limit,))
+
+            return cursor.fetchall()
+        except sqlite3.Error as error:
+            print(f"Ошибка при получении ошибок: {error}")
+            return []
+
+    def update_error_status(self, error_id, status, admin_id=None):
+        """Обновление статуса ошибки"""
+        try:
+            # Валидация входных данных
+            if not isinstance(error_id, int) or error_id <= 0:
+                print(f"Ошибка валидации: некорректный error_id = {error_id}")
+                return False
+
+            valid_statuses = ['new', 'in_progress', 'resolved', 'rejected']
+            if status not in valid_statuses:
+                print(f"Ошибка валидации: некорректный статус = {status}")
+                return False
+
+            # Проверка соединения с базой данных
+            if not self.connection:
+                print("Ошибка: соединение с базой данных не установлено")
+                return False
+
+            cursor = self.connection.cursor()
+            current_time = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+
+            if status == 'resolved':
+                cursor.execute("""
+                    UPDATE errors
+                    SET status = ?, updated_at = ?, resolved_at = ?
+                    WHERE error_id = ?
+                """, (status, current_time, current_time, error_id))
+            else:
+                cursor.execute("""
+                    UPDATE errors
+                    SET status = ?, updated_at = ?
+                    WHERE error_id = ?
+                """, (status, current_time, error_id))
+
+            self.connection.commit()
+            return cursor.rowcount > 0
+        except sqlite3.Error as error:
+            print(f"Ошибка базы данных при обновлении статуса ошибки: {error}")
+            if self.connection:
+                self.connection.rollback()
+            return False
+
+    def update_error_ai_analysis(self, error_id, ai_analysis):
+        """Обновление анализа ИИ для ошибки"""
+        try:
+            # Валидация входных данных
+            if not isinstance(error_id, int) or error_id <= 0:
+                print(f"Ошибка валидации: некорректный error_id = {error_id}")
+                return False
+
+            if not ai_analysis or not isinstance(ai_analysis, str):
+                print(f"Ошибка валидации: некорректный анализ ИИ = {ai_analysis}")
+                return False
+
+            # Проверка соединения с базой данных
+            if not self.connection:
+                print("Ошибка: соединение с базой данных не установлено")
+                return False
+
+            cursor = self.connection.cursor()
+            current_time = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+
+            cursor.execute("""
+                UPDATE errors
+                SET ai_analysis = ?, updated_at = ?
+                WHERE error_id = ?
+            """, (ai_analysis, current_time, error_id))
+
+            self.connection.commit()
+            return cursor.rowcount > 0
+        except sqlite3.Error as error:
+            print(f"Ошибка базы данных при обновлении анализа ИИ: {error}")
+            if self.connection:
+                self.connection.rollback()
+            return False
+
+    def mark_error_todo_added(self, error_id):
+        """Отметить ошибку как добавленную в TODO список"""
+        try:
+            # Валидация входных данных
+            if not isinstance(error_id, int) or error_id <= 0:
+                print(f"Ошибка валидации: некорректный error_id = {error_id}")
+                return False
+
+            # Проверка соединения с базой данных
+            if not self.connection:
+                print("Ошибка: соединение с базой данных не установлено")
+                return False
+
+            cursor = self.connection.cursor()
+            current_time = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+
+            cursor.execute("""
+                UPDATE errors
+                SET todo_added = 1, updated_at = ?
+                WHERE error_id = ?
+            """, (current_time, error_id))
+
+            self.connection.commit()
+            return cursor.rowcount > 0
+        except sqlite3.Error as error:
+            print(f"Ошибка базы данных при отметке ошибки в TODO: {error}")
+            if self.connection:
+                self.connection.rollback()
+            return False
+
+    def get_error_by_id(self, error_id):
+        """Получение конкретной ошибки по ID"""
+        try:
+            # Валидация входных данных
+            if not isinstance(error_id, int) or error_id <= 0:
+                print(f"Ошибка валидации: некорректный error_id = {error_id}")
+                return None
+
+            cursor = self.connection.cursor()
+            cursor.execute("""
+                SELECT e.error_id, e.admin_id, e.error_type, e.title, e.description,
+                       e.status, e.priority, e.created_at, e.updated_at, e.ai_analysis,
+                       e.todo_added, e.resolved_at, u.first_name, u.username
+                FROM errors e
+                LEFT JOIN users u ON e.admin_id = u.user_id
+                WHERE e.error_id = ?
+            """, (error_id,))
+
+            result = cursor.fetchone()
+            return result
+        except sqlite3.Error as error:
+            print(f"Ошибка при получении ошибки: {error}")
+            return None
 
     def close(self):
         """Закрытие соединения с базой данных"""
