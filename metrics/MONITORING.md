@@ -101,7 +101,7 @@ telegram_bot_status
 ### Добавление нового правила алерта
 
 ```python
-from core.alerts import AlertManager
+from .alerts import AlertManager
 
 # В Application или где-то еще
 alert_manager = AlertManager(config, metrics)

@@ -23,8 +23,8 @@ async def test_monitoring_integration():
     try:
         # Тест 1: Проверка импорта модулей
         print("\n📦 Тест импорта модулей...")
-        from core.monitoring import MetricsCollector, structured_logger
-        from core.alerts import AlertManager
+        from metrics.monitoring import MetricsCollector, structured_logger
+        from metrics.alerts import AlertManager
         from core.config import Config
         print("✅ Все модули импортированы успешно")
 

@@ -11,15 +11,15 @@
    - Система алертов в Telegram
 
 2. **🛠 Инструменты мониторинга:**
-   - `core/monitoring.py` - ядро системы мониторинга
-   - `core/alerts.py` - менеджер алертов
-   - `prometheus_server.py` - сервер метрик
-   - `test_monitoring_integration.py` - тесты
+   - `metrics/monitoring.py` - ядро системы мониторинга
+   - `metrics/alerts.py` - менеджер алертов
+   - `metrics/prometheus_server.py` - сервер метрик
+   - `metrics/test_monitoring_integration.py` - тесты
 
 3. **📚 Документация:**
-   - `MONITORING.md` - подробная документация (313 строк)
-   - `README_MONITORING.md` - быстрый старт
-   - `GLITCHTIP_SETUP.md` - настройка GlitchTip
+   - `metrics/MONITORING.md` - подробная документация (313 строк)
+   - `metrics/README_MONITORING.md` - быстрый старт
+   - `metrics/GLITCHTIP_SETUP.md` - настройка GlitchTip
    - `WEBHOOK_ALERTS.md` - webhook для алертов
    - Обновленный `README.md` с историей проекта
 

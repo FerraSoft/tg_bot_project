@@ -6,7 +6,7 @@
 
 import logging
 from prometheus_client import start_http_server, REGISTRY
-from core.monitoring import MetricsCollector
+from .monitoring import MetricsCollector
 from core.config import Config
 
 

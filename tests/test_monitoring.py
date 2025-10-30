@@ -9,7 +9,7 @@ import time
 import os
 from unittest.mock import patch, MagicMock
 from prometheus_client import REGISTRY
-from core.monitoring import MetricsCollector, structured_logger
+from metrics.monitoring import MetricsCollector, structured_logger
 from core.config import Config
 
 
@@ -227,7 +227,7 @@ class TestErrorHandling:
 
     def test_measure_time_decorator(self, metrics):
         """Тест декоратора measure_time"""
-        from core.monitoring import measure_time
+        from metrics.monitoring import measure_time
 
         @measure_time(metrics, 'test_api')
         def test_function():
@@ -240,7 +240,7 @@ class TestErrorHandling:
     @pytest.mark.asyncio
     async def test_error_handler_decorator(self, metrics):
         """Тест декоратора error_handler"""
-        from core.monitoring import error_handler
+        from metrics.monitoring import error_handler
 
         @error_handler(metrics, 'test_handler')
         async def failing_function():

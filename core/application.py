@@ -42,8 +42,8 @@ from telegram.ext import CommandHandler, MessageHandler, CallbackQueryHandler, f
 # Импорты из текущего пакета
 from .config import Config
 from .exceptions import BotException, ConfigurationError
-from .monitoring import MetricsCollector, structured_logger, measure_time, error_handler
-from .alerts import AlertManager
+from metrics.monitoring import MetricsCollector, structured_logger, measure_time, error_handler
+from metrics.alerts import AlertManager
 from .single_instance import check_single_instance
 
 # Репозитории

@@ -229,7 +229,7 @@ OPENAI_API_KEY = "test_key"
 
         # Создаем обработчик с правильным metrics объектом
         from handlers.user_handlers import UserHandlers
-        from core.monitoring import MetricsCollector
+        from metrics.monitoring import MetricsCollector
         metrics = MetricsCollector(config)
         user_handlers = UserHandlers(config, metrics, user_service)
 
@@ -277,7 +277,7 @@ OPENAI_API_KEY = "test_key"
 
         # Создаем обработчик с правильным metrics объектом
         from handlers.user_handlers import UserHandlers
-        from core.monitoring import MetricsCollector
+        from metrics.monitoring import MetricsCollector
         metrics = MetricsCollector(config)
         user_handlers = UserHandlers(config, metrics, user_service)
 
@@ -319,7 +319,7 @@ OPENAI_API_KEY = "test_key"
 
         # Создаем обработчик с правильным metrics объектом
         from handlers.user_handlers import UserHandlers
-        from core.monitoring import MetricsCollector
+        from metrics.monitoring import MetricsCollector
         metrics = MetricsCollector(config)
         user_handlers = UserHandlers(config, metrics, user_service)
 
@@ -363,7 +363,7 @@ OPENAI_API_KEY = "test_key"
 
         # Создаем обработчик с правильным metrics объектом
         from handlers.user_handlers import UserHandlers
-        from core.monitoring import MetricsCollector
+        from metrics.monitoring import MetricsCollector
         metrics = MetricsCollector(config)
         user_handlers = UserHandlers(config, metrics, user_service)
 
@@ -407,7 +407,7 @@ OPENAI_API_KEY = "test_key"
 
         # Создаем обработчик с правильным metrics объектом
         from handlers.user_handlers import UserHandlers
-        from core.monitoring import MetricsCollector
+        from metrics.monitoring import MetricsCollector
         metrics = MetricsCollector(config)
         user_handlers = UserHandlers(config, metrics, user_service)
 

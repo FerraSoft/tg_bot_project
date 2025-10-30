@@ -11,7 +11,7 @@ from telegram import Update
 from telegram.ext import ContextTypes
 from core.exceptions import BotException, ValidationError, PermissionError
 from utils.formatters import MessageFormatter
-from core.monitoring import MetricsCollector
+from metrics.monitoring import MetricsCollector
 
 
 class BaseHandler(ABC):

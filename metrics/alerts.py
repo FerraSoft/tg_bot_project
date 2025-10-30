@@ -8,7 +8,7 @@ import logging
 from typing import Dict, List, Optional, Callable
 from datetime import datetime, timedelta
 import requests
-from .config import Config
+from core.config import Config
 from .monitoring import MetricsCollector
 
 

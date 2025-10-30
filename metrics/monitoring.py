@@ -12,7 +12,7 @@ from typing import Optional, Dict, Any, Callable
 from prometheus_client import Counter, Histogram, Gauge, start_http_server
 import sentry_sdk
 from sentry_sdk.integrations.logging import LoggingIntegration
-from .config import Config
+from core.config import Config
 
 
 class MetricsCollector:

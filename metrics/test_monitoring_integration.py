@@ -11,8 +11,8 @@ import time
 import sys
 import io
 from core.config import Config
-from core.monitoring import MetricsCollector, structured_logger
-from core.alerts import AlertManager
+from .monitoring import MetricsCollector, structured_logger
+from .alerts import AlertManager
 
 # Установка UTF-8 кодировки для вывода
 sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8')
