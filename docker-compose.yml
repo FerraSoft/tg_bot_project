@@ -3,39 +3,49 @@ version: '3.8'
 services:
   telegram-bot:
     build: .
-    container_name: telegram-bot
+    container_name: telegram_bot
     restart: unless-stopped
+
+    # Переменные окружения
     environment:
       - BOT_TOKEN=${BOT_TOKEN}
+      - OPENWEATHER_API_KEY=${OPENWEATHER_API_KEY}
+      - NEWS_API_KEY=${NEWS_API_KEY}
       - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - ADMIN_IDS=${ADMIN_IDS}
       - DEVELOPER_CHAT_ID=${DEVELOPER_CHAT_ID}
-      - ENABLE_DEVELOPER_NOTIFICATIONS=${ENABLE_DEVELOPER_NOTIFICATIONS:-True}
-      - ENABLE_AI_ERROR_PROCESSING=${ENABLE_AI_ERROR_PROCESSING:-True}
+      - ENABLE_DEVELOPER_NOTIFICATIONS=${ENABLE_DEVELOPER_NOTIFICATIONS:-true}
+      - ENABLE_AI_ERROR_PROCESSING=${ENABLE_AI_ERROR_PROCESSING:-true}
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+      - DATABASE_URL=${DATABASE_URL:-telegram_bot.db}
+
+    # Маппинг портов (если нужно)
+    # ports:
+    #   - "8080:8080"
+
+    # Маппинг volumes для сохранения данных
     volumes:
-      - bot_data:/app/data
-      - ./config_local.py:/app/config_local.py:ro
-    networks:
-      - bot-network
+      - ./data:/app/data
+      - ./logs:/app/logs
+      - ./temp:/app/temp
+      - ./backups:/app/backups
 
-  scheduler:
-    build: .
-    container_name: telegram-bot-scheduler
-    restart: unless-stopped
-    command: python scheduler.py
-    environment:
-      - BOT_TOKEN=${BOT_TOKEN}
-    volumes:
-      - bot_data:/app/data
-      - ./config_local.py:/app/config_local.py:ro
-    networks:
-      - bot-network
-    depends_on:
-      - telegram-bot
+    # Health check
+    healthcheck:
+      test: ["CMD", "python", "-c", "print('Bot is healthy')"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
 
-volumes:
-  bot_data:
-    driver: local
+    # Логи
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
 
+# Сеть для изоляции
 networks:
-  bot-network:
-    driver: bridge
+  default:
+    name: telegram-bot-network

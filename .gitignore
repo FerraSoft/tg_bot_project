@@ -4,6 +4,10 @@ telegram_bot.db
 *.db
 *.sqlite
 *.sqlite3
+database.db
+telegram_bot.db-shm
+telegram_bot.db-wal
+telegram_bot_backup_*.db
 
 # Временные файлы
 __pycache__/
@@ -65,3 +69,16 @@ Thumbs.db
 *_api_key.txt
 *_token.txt
 .secrets
+
+# Локальные .env файлы (могут содержать реальные ключи)
+.env.local
+.env.production
+.env.development
+.env.test
+
+# Бэкапы и временные файлы
+*.bak
+*.backup
+# Планировщик задач на завтра
+TODO_NEXT_DAY.md
+*.old

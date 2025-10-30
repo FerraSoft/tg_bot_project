@@ -20,7 +20,7 @@ def migrate_ranks():
     try:
         # Получаем всех пользователей
         cursor = db.connection.cursor()
-        cursor.execute("SELECT user_id, reputation, rank FROM users")
+        cursor.execute("SELECT telegram_id, reputation, rank FROM users")
         users = cursor.fetchall()
 
         print(f"Найдено {len(users)} пользователей для миграции")
@@ -33,7 +33,7 @@ def migrate_ranks():
 
             # Обновляем ранг, если он изменился
             if new_rank != old_rank:
-                cursor.execute("UPDATE users SET rank = ? WHERE user_id = ?", (new_rank, user_id))
+                cursor.execute("UPDATE users SET rank = ? WHERE telegram_id = ?", (new_rank, user_id))
                 print(f"Пользователь {user_id}: '{old_rank}' -> '{new_rank}' (репутация: {reputation})")
                 migrated_count += 1
 

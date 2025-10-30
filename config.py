@@ -34,5 +34,9 @@ LOG_CONFIG = {
     "level": "INFO",
     "file": "bot.log",
     "max_size": 10*1024*1024,  # 10 MB
-    "backup_count": 5
+    "backup_count": 5,
+    "format": "json",  # JSON format for structured logging
+    "sentry_dsn": "YOUR_SENTRY_DSN_HERE",  # Sentry DSN for error tracking
+    "enable_sentry": False,  # Enable Sentry integration
+    "prometheus_port": 8000  # Port for Prometheus metrics
 }

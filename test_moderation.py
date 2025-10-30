@@ -371,7 +371,7 @@ class ModerationSystemTester:
                 # Удаляем тестовых пользователей и предупреждения
                 test_user_ids = [999999, 888888]
                 for user_id in test_user_ids:
-                    cursor.execute("DELETE FROM users WHERE id = ?", (user_id,))
+                    cursor.execute("DELETE FROM users WHERE user_id = ?", (user_id,))
                     cursor.execute("DELETE FROM warnings WHERE user_id = ?", (user_id,))
 
                 self.db.connection.commit()

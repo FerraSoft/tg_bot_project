@@ -15,6 +15,7 @@ class Database:
         """Установка соединения с SQLite базой данных"""
         try:
             self.connection = sqlite3.connect(self.db_file)
+            self.connection.execute('PRAGMA foreign_keys = ON')
             print(TECH_MESSAGES['db_connected'])
         except sqlite3.Error as error:
             print(TECH_MESSAGES['db_connection_error'].format(error=error))
@@ -28,24 +29,25 @@ class Database:
             # Таблица пользователей
             cursor.execute("""
                 CREATE TABLE IF NOT EXISTS users (
-                    user_id INTEGER PRIMARY KEY,
-                    username TEXT,
-                    first_name TEXT,
-                    last_name TEXT,
-                    reputation INTEGER DEFAULT 0,
-                    rank TEXT DEFAULT 'Рядовой',
-                    message_count INTEGER DEFAULT 0,
-                    active_days INTEGER DEFAULT 0,
-                    days_since_join INTEGER DEFAULT 0,
-                    last_message TIMESTAMP,
-                    joined_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                    left_at TIMESTAMP,
-                    language TEXT DEFAULT 'ru',
-                    actions TEXT DEFAULT '[]',
-                    score INTEGER DEFAULT 0,
-                    warnings INTEGER DEFAULT 0,
-                    role TEXT DEFAULT 'user'
-                )
+                     user_id INTEGER PRIMARY KEY,
+                     username TEXT,
+                     first_name TEXT,
+                     last_name TEXT,
+                     reputation INTEGER DEFAULT 0,
+                     rank TEXT DEFAULT 'Рядовой',
+                     message_count INTEGER DEFAULT 0,
+                     active_days INTEGER DEFAULT 0,
+                     days_since_join INTEGER DEFAULT 0,
+                     last_message TIMESTAMP,
+                     joined_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                     left_at TIMESTAMP,
+                     language TEXT DEFAULT 'ru',
+                     actions TEXT DEFAULT '[]',
+                     score INTEGER DEFAULT 0,
+                     warnings INTEGER DEFAULT 0,
+                     role TEXT DEFAULT 'user',
+                     last_activity DATETIME DEFAULT CURRENT_TIMESTAMP
+                 )
             """)
 
             # Таблица предупреждений
