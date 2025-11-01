@@ -79,6 +79,10 @@ Thumbs.db
 # Бэкапы и временные файлы
 *.bak
 *.backup
-# Планировщик задач на завтра
-TODO_NEXT_DAY.md
 *.old
+
+#Идеи
+IDEA/
+# Планировщик задач на завтра
+TODO/
+TODO_NEXT_DAY.md

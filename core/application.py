@@ -175,7 +175,7 @@ class Application:
         handlers = {}
 
         # Импорт обработчиков локально для избежания циклических импортов
-        from handlers import BaseHandler, UserHandlers, GameHandlers, AdminHandlers, ModerationHandlers
+        from handlers import BaseHandler, UserHandlers, GameHandlers, AdminHandlers, ModerationHandlers, AIHandlers
         self.logger.debug("_initialize_handlers - imports successful")
 
         try:
@@ -183,6 +183,8 @@ class Application:
             handlers['game'] = GameHandlers(self.config, self.metrics, self.game_service)
             handlers['moderation'] = ModerationHandlers(self.config, self.metrics, self.user_service, self.moderation_service)
             handlers['admin'] = AdminHandlers(self.config, self.metrics, self.user_service, self.moderation_service)
+            # Инициализация AI обработчиков
+            handlers['ai'] = AIHandlers(self.telegram_app.bot, self.user_service)
 
             # Инициализируем PaymentHandler если доступны сервисы платежей
             if hasattr(self, 'donation_service') and self.donation_service:
@@ -279,7 +281,8 @@ class Application:
                 ('user', 'UserHandlers', [self.config, self.metrics, self.user_service, self.error_repo]),
                 ('game', 'GameHandlers', [self.config, self.metrics, self.game_service]),
                 ('moderation', 'ModerationHandlers', [self.config, self.metrics, self.user_service, self.moderation_service]),
-                ('admin', 'AdminHandlers', [self.config, self.metrics, self.user_service, self.moderation_service])
+                ('admin', 'AdminHandlers', [self.config, self.metrics, self.user_service, self.moderation_service]),
+                ('ai', 'AIHandlers', [self.telegram_app.bot, self.user_service])
             ]
 
             for handler_name, class_name, init_args in handler_types:
@@ -353,7 +356,8 @@ class Application:
             callback_handler_types = [
                 ('user', 'UserHandlers', [self.config, self.metrics, self.user_service, self.error_repo]),
                 ('game', 'GameHandlers', [self.config, self.metrics, self.game_service]),
-                ('admin', 'AdminHandlers', [self.config, self.metrics, self.user_service, self.moderation_service])
+                ('admin', 'AdminHandlers', [self.config, self.metrics, self.user_service, self.moderation_service]),
+                ('ai', 'AIHandlers', [self.telegram_app.bot, self.user_service])
             ]
 
             for handler_name, class_name, init_args in callback_handler_types:
